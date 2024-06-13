@@ -1,0 +1,5 @@
+predictions/
+checkpoints/
+experiments/
+__pycache__/
+*.png
