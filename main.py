@@ -116,6 +116,7 @@ def train(local_rank, train_files, test_files, fold_idx):
     setup_seed(seed)
 
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=lamb)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=5, eta_min=1e-5)
     scaler = GradScaler()
     
     if args.resume:
@@ -143,15 +144,20 @@ def train(local_rank, train_files, test_files, fold_idx):
             model.train()
             optimizer.zero_grad()
 
-            if 'dragonnet' in args.model_name:  # unsage bce for dragonnet, which does not allow autocast
+            if 'dragonnet' in args.model_name and not args.enable_amp:  # unsage bce for dragonnet, which does not allow autocast
                 loss = model.calculate_loss(feature_list, is_treat, label_list)
             else:
                 with autocast():
                     loss = model.calculate_loss(feature_list, is_treat, label_list)
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            if args.enable_amp:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
+            scheduler.step()
 
             tr_loss += loss.item()
 
@@ -202,6 +208,7 @@ if __name__ == "__main__":
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
     parser.add_argument('--model_name', type=str, default='efin')
     parser.add_argument('--enable_mlflow', action='store_true', default=False)
+    parser.add_argument('--enable_amp', action='store_true', default=False)
     parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow'], help='all data or a subset of data')
     args = parser.parse_args()
 
