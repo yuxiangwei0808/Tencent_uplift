@@ -5,8 +5,8 @@ import torch.nn.functional as F
 from typing import Union
 from timm.layers import Mlp, ClassifierHead
 
-from .abs_mt_arch import AbsArchitecture
-from .base_models import *
+from abs_mt_arch import AbsArchitecture
+from base_models import *
 
 
 class ClsHead(nn.Module):
@@ -18,7 +18,6 @@ class ClsHead(nn.Module):
     def forward(self, x):
         return self.fc(self.pool(x).squeeze())
     
-
 
 class feat_encoder(nn.Module):
     def __init__(self, u_in_dims):
@@ -159,7 +158,7 @@ class MTMT(nn.Module):
         
         u_logit, tu_tau, tu_logit = self.forward(user_input, treatment_input)
         
-        loss1 = F.mse_loss((1 - treatment_input) * u_logit[0] + treatment_input * tu_logit, y_true)  # binary
+        loss1 = F.mse_loss((1 - treatment_input) * u_logit[0].squeeze() + treatment_input * tu_logit.squeeze(), y_true)  # binary
         
         # ESN IPW regularize
         
@@ -188,4 +187,4 @@ if __name__ == '__main__':
     t = torch.ones(4)
     model = MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
-    model.calc_loss(x, t, torch.zeros(4))
+    model.calculate_loss(x, t, torch.zeros(4))
