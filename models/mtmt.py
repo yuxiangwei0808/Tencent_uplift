@@ -5,8 +5,8 @@ import torch.nn.functional as F
 from typing import Union
 from timm.layers import Mlp, ClassifierHead
 
-from abs_mt_arch import AbsArchitecture
-from base_models import *
+from .abs_mt_arch import AbsArchitecture
+from .base_models import *
 
 
 class ClsHead(nn.Module):
@@ -116,7 +116,8 @@ class MTMT(nn.Module):
         self.K_w = nn.Linear(u_dim, tu_dim, bias=True)
         self.V_w = nn.Linear(u_dim, tu_dim, bias=True)
         self.softmax = nn.Softmax(dim=-1)
-        self.self_attention = nn.MultiheadAttention(embed_dim=tu_dim, num_heads=8, batch_first=True)
+        
+        self.self_attention = nn.MultiheadAttention(embed_dim=tu_dim, num_heads=8)  # L B C input
         
         self.tu_enhance = nn.Sequential(
             # TODO try add layers here or use attention
@@ -131,7 +132,7 @@ class MTMT(nn.Module):
     def forward(self, user_input, treatment_input):        
         user_feat = self.user_enc(user_input.unsqueeze(1))  # dict of tensors
         user_feat = {'nextday_login': user_feat}
-        treat_feat = self.treatment_enc(treatment_input.to(torch.int))  # B N
+        treat_feat = self.treatment_enc(treatment_input.to(torch.long))  # B N
         
         u_logit = [self.u_tau[task](user_feat[task]) for task in self.task_names]
         
@@ -177,7 +178,7 @@ class MTMT(nn.Module):
         return outputs, attn_weights
 
 
-def mtmt_res_enb_v0():
+def mtmt_res_emb_v0():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
 
