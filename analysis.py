@@ -5,6 +5,7 @@ import pandas as pd
 
 from metrics import uplift_at_k, uplift_by_percentile
 from sklift.metrics import qini_auc_score, uplift_auc_score
+from sklift.viz import plot_qini_curve, plot_uplift_by_percentile, plot_uplift_curve
 
 
 def sigmoid(z):
@@ -55,7 +56,20 @@ def plot_and_save_precision_recall_vs_threshold(predictions, targets, filename='
     plt.legend(loc="best")
     plt.savefig(filename)
     plt.close()
+    
 
+def plot_uplift_qini_curve(targets, predictions, treats):
+    print(uplift_by_percentile(targets, predictions. treats))
+    
+    up_per = plot_uplift_by_percentile(targets, predictions, treats, kind='bar')
+    plt.savefig('uplift_by_percentile.png', bbox_inches='tight')    
+    
+    qini_disp = plot_qini_curve(targets, predictions, treats)
+    plt.savefig('qini.png', bbox_inches='tight')
+    
+    auuc_disp = plot_uplift_curve(targets, predictions, treats)
+    plt.savefig('uplift.png', bbox_inches='tight')
+    
 
 def analysis(targets, preds, treats):
     preds_bin = sigmoid(preds)
@@ -81,16 +95,27 @@ def analysis(targets, preds, treats):
 
 def analysis_by_logindays(targets, preds, treats, add_feats):
     # analyze the results by each login days (add_feats[:, 1])
-    uplifts_percentiles, qinis, auucs = [], [], []    
-    for day in range(15):  # 0-14
+    uplifts_percentiles, qinis, auucs = [], [], []  
+    
+    if 'full' in source:
+        ranger = np.arange(15)
+    elif 'highactive' in source:
+        ranger = np.arange(10, 15)
+    elif 'midactive' in source:
+        ranger = np.arange(5, 10)
+    elif 'lowactive' in source:
+        ranger = np.arange(1, 5)
+    else:
+        ranger = np.arange(1)
+    
+    for day in ranger:
         idx = add_feats == day
         uplifts, qini, auuc = analysis(targets[idx], preds[idx], treats[idx])
         uplifts_percentiles.append(uplifts)
         qinis.append(qini)
         auucs.append(auuc)
         
-        if day == 0:
-            percentiles = list(uplifts['uplift'].keys())
+        percentiles = list(uplifts['uplift'].keys())
             
     print('average qini: ', np.mean(qinis))
     print('average auuc: ', np.mean(auucs))
@@ -99,14 +124,14 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     print('average percentile: ', dfs.groupby(level=0).mean())
     
     plt.figure()
-    plt.plot(np.arange(15), qinis)
+    plt.plot(ranger, qinis)
     plt.grid(True)
     plt.xlabel('login days')
     plt.ylabel('QINI')
     plt.savefig('qini.png')
     
     plt.figure()
-    plt.plot(np.arange(15), auucs)
+    plt.plot(ranger, auucs)
     plt.grid(True)
     plt.xlabel('login days')
     plt.ylabel('AUUC')
@@ -115,7 +140,7 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     fig, ax = plt.subplots()
     for p in percentiles:
         ufs = [x.loc[p]['uplift'] for x in uplifts_percentiles]
-        ax.plot(np.arange(15), ufs, label=f'percentile={p}')
+        ax.plot(ranger, ufs, label=f'percentile={p}')
     ax.legend(fontsize='5')
     ax.grid(True)
     ax.set_xlabel('login days')
@@ -139,4 +164,5 @@ for i in range(5):
 
 targets, preds, treats, add_feats = np.concatenate(targets, 0), np.concatenate(preds, 0), np.concatenate(treats, 0), np.concatenate(add_feats, 0)
 
-analysis_by_logindays(targets, preds, treats, add_feats)
+plot_uplift_qini_curve(targets, preds, treats)
+# analysis_by_logindays(targets, preds, treats, add_feats)
