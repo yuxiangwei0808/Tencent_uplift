@@ -40,6 +40,8 @@ def valid(model, valid_dataloader, device, metric, epoch):
         elif 'dragonnet' in args.model_name:
             y0, y1, _, _ = model(feature_list)
             u_tau = y1 - y0
+        elif 'mtmt' in args.model_name:
+            _, _, u_tau = model(feature_list, is_treat)
         else:
             raise NotImplementedError
         uplift = u_tau.squeeze()
@@ -99,14 +101,8 @@ def train(local_rank, train_files, test_files, fold_idx):
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], output_device=local_rank) if dist.is_initialized() else model
     
-    if 'efin' in args.model_name:
-        ckpt_path = f"checkpoints/{args.data_type}/{args.norm_type}/{args.model_name}/{args.model_name}_{fold_idx}_"
-        pred_path = f"predictions/{args.data_type}/{args.norm_type}/{args.model_name}/train/{args.model_name}_{fold_idx}_"
-    elif 'dragonnet' in args.model_name:
-        ckpt_path = f"checkpoints/{args.data_type}/{args.norm_type}/{args.model_name}/{args.model_name}_{fold_idx}_"
-        pred_path = f"predictions/{args.data_type}/{args.norm_type}/{args.model_name}/train/{args.model_name}_{fold_idx}_"
-    else:
-        raise NotImplementedError
+    ckpt_path = f"checkpoints/{args.data_type}/{args.norm_type}/{args.model_name}/{args.model_name}_{fold_idx}_"
+    pred_path = f"predictions/{args.data_type}/{args.norm_type}/{args.model_name}/train/{args.model_name}_{fold_idx}_"
     
     if args.enable_dist:
         torch.distributed.init_process_group(backend='nccl', init_method='env://', world_size=world_size, rank=local_rank)
@@ -116,6 +112,7 @@ def train(local_rank, train_files, test_files, fold_idx):
     setup_seed(seed)
 
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=lamb)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=5, eta_min=1e-5)
     scaler = GradScaler()
     
     if args.resume:
@@ -143,15 +140,20 @@ def train(local_rank, train_files, test_files, fold_idx):
             model.train()
             optimizer.zero_grad()
 
-            if 'dragonnet' in args.model_name:  # unsage bce for dragonnet, which does not allow autocast
+            if 'dragonnet' in args.model_name or not args.enable_amp:  # unsage bce for dragonnet, which does not allow autocast
                 loss = model.calculate_loss(feature_list, is_treat, label_list)
             else:
                 with autocast():
                     loss = model.calculate_loss(feature_list, is_treat, label_list)
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            if args.enable_amp:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
+            scheduler.step()
 
             tr_loss += loss.item()
 
@@ -202,6 +204,7 @@ if __name__ == "__main__":
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
     parser.add_argument('--model_name', type=str, default='efin')
     parser.add_argument('--enable_mlflow', action='store_true', default=False)
+    parser.add_argument('--enable_amp', action='store_true', default=False)
     parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow'], help='all data or a subset of data')
     args = parser.parse_args()
 
@@ -217,7 +220,7 @@ if __name__ == "__main__":
         mlflow.set_tag('mlflow.runName', args.model_name)
         mlflow.set_tag('model_name', args.model_name)
         mlflow.log_params(vars(args))
-        # mlflow.log_artifacts('./', artifact_path='python_files')
+        mlflow.log_artifacts('./models', artifact_path='python_files')
 
     local_rank = args.local_rank
     world_size = args.world_size
@@ -251,7 +254,7 @@ if __name__ == "__main__":
         print(f'best metrics for fold {fold_idx}: {best_valid_metrics}')
         
         if args.enable_mlflow:
-            mlflow.log_metrics(best_valid_metrics, step=fold_idx)
+            mlflow.log_metrics({'best_' + v for k, v in best_valid_metrics.items()}, step=fold_idx)
         
         ave_best_valid_metrics = {k: ave_best_valid_metrics[k] + best_valid_metrics[k] for k in best_valid_metrics}
     

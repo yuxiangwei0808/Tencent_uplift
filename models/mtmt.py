@@ -19,7 +19,6 @@ class ClsHead(nn.Module):
         return self.fc(self.pool(x).squeeze())
     
 
-
 class feat_encoder(nn.Module):
     def __init__(self, u_in_dims):
         super().__init__()
@@ -116,7 +115,8 @@ class MTMT(nn.Module):
         self.K_w = nn.Linear(u_dim, tu_dim, bias=True)
         self.V_w = nn.Linear(u_dim, tu_dim, bias=True)
         self.softmax = nn.Softmax(dim=-1)
-        self.self_attention = nn.MultiheadAttention(embed_dim=tu_dim, num_heads=8, batch_first=True)
+        
+        self.self_attention = nn.MultiheadAttention(embed_dim=tu_dim, num_heads=8)  # L B C input
         
         self.tu_enhance = nn.Sequential(
             # TODO try add layers here or use attention
@@ -131,7 +131,7 @@ class MTMT(nn.Module):
     def forward(self, user_input, treatment_input):        
         user_feat = self.user_enc(user_input.unsqueeze(1))  # dict of tensors
         user_feat = {'nextday_login': user_feat}
-        treat_feat = self.treatment_enc(treatment_input.to(torch.int))  # B N
+        treat_feat = self.treatment_enc(treatment_input.to(torch.long))  # B N
         
         u_logit = [self.u_tau[task](user_feat[task]) for task in self.task_names]
         
@@ -152,13 +152,13 @@ class MTMT(nn.Module):
         
         return u_logit, tu_tau, tu_logit
         
-    def calc_loss(self, user_input, treatment_input, y_true):
+    def calculate_loss(self, user_input, treatment_input, y_true):
         # TODO try different weight balancing for MTL
         # TODO multi-treatment
         
         u_logit, tu_tau, tu_logit = self.forward(user_input, treatment_input)
         
-        loss1 = F.mse_loss((1 - treatment_input) * u_logit[0] + treatment_input * tu_logit, y_true)  # binary
+        loss1 = F.mse_loss((1 - treatment_input) * u_logit[0].squeeze() + treatment_input * tu_logit.squeeze(), y_true)  # binary
         
         # ESN IPW regularize
         
@@ -175,11 +175,16 @@ class MTMT(nn.Module):
         attn_weights = self.softmax(attn_weights)
         outputs = torch.matmul(attn_weights, V)
         return outputs, attn_weights
-        
+
+
+def mtmt_res_emb_v0():
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['nextday_login'],
+                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
 
 if __name__ == '__main__':
     x = torch.randn(4, 622)
     t = torch.ones(4)
     model = MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
-    model.calc_loss(x, t, torch.zeros(4))
+    model.calculate_loss(x, t, torch.zeros(4))
