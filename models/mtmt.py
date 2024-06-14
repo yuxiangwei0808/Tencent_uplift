@@ -152,7 +152,7 @@ class MTMT(nn.Module):
         
         return u_logit, tu_tau, tu_logit
         
-    def calc_loss(self, user_input, treatment_input, y_true):
+    def calculate_loss(self, user_input, treatment_input, y_true):
         # TODO try different weight balancing for MTL
         # TODO multi-treatment
         
@@ -175,7 +175,12 @@ class MTMT(nn.Module):
         attn_weights = self.softmax(attn_weights)
         outputs = torch.matmul(attn_weights, V)
         return outputs, attn_weights
-        
+
+
+def mtmt_res_enb_v0():
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['nextday_login'],
+                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
 
 if __name__ == '__main__':
     x = torch.randn(4, 622)
