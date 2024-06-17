@@ -2,6 +2,7 @@ import numpy as np
 from sklearn.metrics import *
 import matplotlib.pyplot as plt
 import pandas as pd
+import seaborn as sns
 
 from metrics import uplift_at_k, uplift_by_percentile
 from sklift.metrics import qini_auc_score, uplift_auc_score
@@ -63,10 +64,11 @@ def analysis_and_plot_uplift_qini_curves(targets, predictions, treats):
     print(uplift_perc)
     print('qini: {}, auuc: {}, u at 0.3: {}'.format(qini, auuc, u_at_k))
     
-    percentiles = np.arange(0, 101, 10)
-    trends_percentile = np.percentile(predictions, percentiles)
-    for p, value in zip(percentiles, trends_percentile):
-        print(f'{p}th percentile: {value}')
+    plt.figure()
+    sns.displot(predictions, bins=100, kde=True)
+    plt.xlim(-0.1, 0.3)
+    plt.grid(True)
+    plt.savefig('u_trend.png', bbox_inches='tight')
     
     up_per = plot_uplift_by_percentile(targets, predictions, treats, kind='bar')
     plt.savefig('uplift_by_percentile.png', bbox_inches='tight')    
@@ -159,7 +161,7 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
 
 
 metric = 'QINI'
-source = 'predictions/lowactive/zscore/efin/test/efin_'
+source = 'predictions/full/zscore/efin/test/efin_96_96_0.001_'
 
 targets, preds, treats, add_feats = [], [], [], []
 
