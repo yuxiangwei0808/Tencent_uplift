@@ -58,8 +58,15 @@ def plot_and_save_precision_recall_vs_threshold(predictions, targets, filename='
     plt.close()
     
 
-def plot_uplift_qini_curve(targets, predictions, treats):
-    print(uplift_by_percentile(targets, predictions. treats))
+def analysis_and_plot_uplift_qini_curves(targets, predictions, treats):
+    uplift_perc, qini, auuc, u_at_k = analysis(targets, predictions, treats)
+    print(uplift_perc)
+    print('qini: {}, auuc: {}, u at 0.3: {}'.format(qini, auuc, u_at_k))
+    
+    percentiles = np.arange(0, 101, 10)
+    trends_percentile = np.percentile(predictions, percentiles)
+    for p, value in zip(percentiles, trends_percentile):
+        print(f'{p}th percentile: {value}')
     
     up_per = plot_uplift_by_percentile(targets, predictions, treats, kind='bar')
     plt.savefig('uplift_by_percentile.png', bbox_inches='tight')    
@@ -69,7 +76,7 @@ def plot_uplift_qini_curve(targets, predictions, treats):
     
     auuc_disp = plot_uplift_curve(targets, predictions, treats)
     plt.savefig('uplift.png', bbox_inches='tight')
-    
+
 
 def analysis(targets, preds, treats):
     preds_bin = sigmoid(preds)
@@ -85,17 +92,18 @@ def analysis(targets, preds, treats):
     uplifts = uplift_by_percentile(targets, preds, treats)
     qini = qini_auc_score(targets, preds, treats)
     auuc = uplift_auc_score(targets, preds, treats)
+    u_at_k = uplift_at_k(targets, preds, treats, strategy='overall', k=0.3)
 
     # plot_and_save_roc_auc(preds, targets)
     # plot_and_save_pr_auc(preds, targets)
     # plot_and_save_precision_recall_vs_threshold(preds, targets)
     
-    return uplifts, qini, auuc
+    return uplifts, qini, auuc, u_at_k
 
 
 def analysis_by_logindays(targets, preds, treats, add_feats):
     # analyze the results by each login days (add_feats[:, 1])
-    uplifts_percentiles, qinis, auucs = [], [], []  
+    uplifts_percentiles, qinis, auucs, uks = [], [], [], []
     
     if 'full' in source:
         ranger = np.arange(15)
@@ -110,15 +118,17 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     
     for day in ranger:
         idx = add_feats == day
-        uplifts, qini, auuc = analysis(targets[idx], preds[idx], treats[idx])
+        uplifts, qini, auuc, u_at_k = analysis(targets[idx], preds[idx], treats[idx])
         uplifts_percentiles.append(uplifts)
         qinis.append(qini)
         auucs.append(auuc)
+        uks.append(u_at_k)
         
         percentiles = list(uplifts['uplift'].keys())
             
     print('average qini: ', np.mean(qinis))
     print('average auuc: ', np.mean(auucs))
+    print('average u at 0.3: ', np.mean(uks))
     
     dfs = pd.concat(uplifts_percentiles)
     print('average percentile: ', dfs.groupby(level=0).mean())
@@ -128,14 +138,14 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     plt.grid(True)
     plt.xlabel('login days')
     plt.ylabel('QINI')
-    plt.savefig('qini.png')
+    plt.savefig('qini_login.png')
     
     plt.figure()
     plt.plot(ranger, auucs)
     plt.grid(True)
     plt.xlabel('login days')
     plt.ylabel('AUUC')
-    plt.savefig('auuc.png')
+    plt.savefig('auuc_login.png')
     
     fig, ax = plt.subplots()
     for p in percentiles:
@@ -145,11 +155,11 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     ax.grid(True)
     ax.set_xlabel('login days')
     ax.set_ylabel('uplifts')
-    plt.savefig('uplift_by_percentile.png')
+    plt.savefig('uplift_by_percentile_login.png')
 
 
-metric = 'ROC-AUC'
-source = 'predictions/lowactive/minmax/efin/test/efin_96_96_0.001_'
+metric = 'QINI'
+source = 'predictions/lowactive/zscore/efin/test/efin_'
 
 targets, preds, treats, add_feats = [], [], [], []
 
@@ -164,5 +174,5 @@ for i in range(5):
 
 targets, preds, treats, add_feats = np.concatenate(targets, 0), np.concatenate(preds, 0), np.concatenate(treats, 0), np.concatenate(add_feats, 0)
 
-plot_uplift_qini_curve(targets, preds, treats)
-# analysis_by_logindays(targets, preds, treats, add_feats)
+analysis_and_plot_uplift_qini_curves(targets, preds, treats)
+analysis_by_logindays(targets, preds, treats, add_feats)
