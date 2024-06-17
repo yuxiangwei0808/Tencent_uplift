@@ -138,14 +138,14 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     plt.grid(True)
     plt.xlabel('login days')
     plt.ylabel('QINI')
-    plt.savefig('qini.png')
+    plt.savefig('qini_login.png')
     
     plt.figure()
     plt.plot(ranger, auucs)
     plt.grid(True)
     plt.xlabel('login days')
     plt.ylabel('AUUC')
-    plt.savefig('auuc.png')
+    plt.savefig('auuc_login.png')
     
     fig, ax = plt.subplots()
     for p in percentiles:
@@ -155,7 +155,7 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     ax.grid(True)
     ax.set_xlabel('login days')
     ax.set_ylabel('uplifts')
-    plt.savefig('uplift_by_percentile.png')
+    plt.savefig('uplift_by_percentile_login.png')
 
 
 metric = 'QINI'
