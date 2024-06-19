@@ -20,54 +20,6 @@ def load_one_gz_file(file_path, field):
     return df
 
 
-def load_df(source_dir, field, is_train, num_folds, fold_id):
-        # in case we want dataframe data
-        files = os.listdir(source_dir)
-        
-        indices = np.arange(len(files))
-        skf = KFold(n_splits=num_folds, shuffle=False)
-        for i, (train_indices, test_indices) in enumerate(skf.split(indices)):
-            if i == fold_id:
-                break
-        indices = train_indices if is_train else test_indices
-                
-        data = []
-        for i in indices:   
-            data.append(load_one_gz_file(os.path.join(source_dir, files[i]), field))
-        data = pd.concat(data, ignore_index=True)
-        data.reset_index(drop=True, inplace=True)
-        return data
-
-
-def collate_fn_tensor(batch: torch.tensor, target_treatment: list, target_task: list,):
-    # target_treatment: target treatment column idx
-    # target_task: target task column idx
-    features = torch.stack([sample[:536] for sample in batch])
-    assert min(min(target_treatment), min(target_task)) > 535, "check the indices for treatments or tasks"
-    treatments = torch.stack([sample[target_treatment] for sample in batch])
-    tasks = torch.stack([sample[target_task] for sample in batch])
-    return features, treatments, tasks
-
-
-def collate_fn_dict(batch, target_treatment, target_task):
-    assert min(min(target_treatment), min(target_task)) > 535, "check the indices for treatments or tasks"
-    treatments = torch.stack([sample[target_treatment] for sample in batch])
-    tasks = torch.stack([sample[target_task] for sample in batch])
-    features = torch.stack([list(sample.values())[:536] for sample in batch])
-    return features, treatments, tasks
-
-
-def collate_fn_ndarray(batch: np.ndarray, target_treatment: list, target_task: list):
-    features = [sample[:536] for sample in batch]
-    assert min(min(target_treatment), min(target_task)) > 535, "check the indices for treatments or tasks"
-    treatments = [sample[target_treatment] for sample in batch]
-    tasks = [sample[target_task] for sample in batch]
-    features = torch.tensor(features).to(torch.float32)
-    treatments = torch.tensor(treatments).to(torch.float32).squeeze()
-    tasks = torch.tensor(tasks).to(torch.float32).squeeze()
-    return features, treatments, tasks
-
-
 def create_folds(file_paths, n_folds=5):
     sub_datasets = [(file_paths[i], file_paths[i+1]) for i in range(0, len(file_paths), 2)]
     kf = KFold(n_splits=n_folds, shuffle=False)
@@ -78,32 +30,6 @@ def create_folds(file_paths, n_folds=5):
         test_files = [file for idx in test_index for file in sub_datasets[idx]]
         folds.append((train_files, test_files))
     return folds
-
-
-def get_data_(source_dir, target_treatment, target_task, fold_id, batch_size, num_folds=5):
-    # directly access gz files
-    # train_set = CustomDataset(source_dir, is_train=True, fold_id=fold_id, num_folds=num_folds)
-    # test_set  = CustomDataset(source_dir, is_train=False, fold_id=fold_id, num_folds=num_folds) 
-
-    # process parquet files. must use streaming or it may oom
-    # dataset = load_dataset('parquet', data_files='data/demo/dataset_demo.parquet', split='train', streaming=True)
-    # train_set = dataset.take(100000)
-    # test_set = dataset.skip(100000).take(20000)
-    
-    # split train and test
-    dataset = CustomDatasetHdf5('data/demo/dataset_demo.hdf5', None)
-    skf = KFold(n_splits=num_folds, shuffle=False)
-    for i, (train_indices, test_indices) in enumerate(skf.split(np.arange(len(dataset)))):
-        if i == fold_id:
-            break
-    train_set = CustomDatasetHdf5('data/demo/dataset_demo.hdf5', train_indices)
-    test_set  = CustomDatasetHdf5('data/demo/dataset_demo.hdf5', test_indices)
-    
-    collate_fn = partial(collate_fn_ndarray, target_treatment=target_treatment, target_task=target_task)
-    sampler = RandomSampler(train_set)
-    train_loader = DataLoader(train_set, sampler=sampler, batch_size=batch_size, collate_fn=collate_fn)
-    test_loader  = DataLoader(test_set, shuffle=False, batch_size=batch_size, collate_fn=collate_fn)
-    return train_loader, test_loader
 
 
 def collate_fn(batch, feature_index, treatment_index, task_index):
@@ -364,70 +290,6 @@ class CustomDataset(Dataset):
                 lengths[i] = sum(1 for line in f)
             total_length += lengths[i]
         return lengths, total_length
-
-
-class CustomDataLoader:
-    def __init__(self, dataset, batch_size=1, shuffle=False, num_workers=0, collate_fn=None):
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.num_workers = num_workers
-        self.collate_fn = collate_fn if collate_fn else self.default_collate
-        self.queue = Queue(maxsize=num_workers * 2)
-        self.processes = []
-
-    def _worker(self, indices, queue):
-        worker_name = current_process().name
-        for idx in indices:
-            queue.put(self.dataset[idx])
-        queue.put(None)  # End-of-data signal
-
-    def __iter__(self):
-        indices = list(range(len(self.dataset)))
-        if self.shuffle:
-            np.random.shuffle(indices)
-
-        if self.num_workers > 0:
-            chunk_size = (len(indices) + self.num_workers - 1) // self.num_workers
-            for i in range(self.num_workers):
-                start_idx = i * chunk_size
-                end_idx = min((i + 1) * chunk_size, len(indices))
-                process = Process(target=self._worker, args=(indices[start_idx:end_idx], self.queue))
-                process.start()
-                self.processes.append(process)
-        else:
-            for idx in indices:
-                self.queue.put(self.dataset[idx])
-            self.queue.put(None)  # End-of-data signal
-
-        return self
-
-    def __next__(self):
-        batch = []
-        while len(batch) < self.batch_size:
-            item = self.queue.get()
-            if item is None:  # End-of-data signal
-                if len(batch) == 0:
-                    self._cleanup()
-                    raise StopIteration
-                else:
-                    break
-            batch.append(item)
-        return self.collate_fn(batch)
-
-    def __len__(self):
-        return (len(self.dataset) + self.batch_size - 1) // self.batch_size
-
-    def _cleanup(self):
-        for process in self.processes:
-            process.join()
-        self.processes = []
-
-    def __del__(self):
-        self._cleanup()
-
-    def default_collate(self, batch):
-        return torch.tensor(batch)
 
 
 def get_all_sizes(source_dir):

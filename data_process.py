@@ -1,40 +1,12 @@
 import os
 import h5py
 import numpy as np
-import gzip
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+from functools import partial
 from tqdm import tqdm
 from multiprocessing import Pool
-
-
-def convert_to_parquet(input_dir, output_file):
-    field_path = 'data/demo/OUT_COLUMN'
-    with open(field_path, 'r') as f:
-            field = f.readlines()
-    field = [x.strip('\n') for x in field]
-
-    # Create an empty list to store dataframes
-    dataframes = []
-    writer = None
-
-    # Iterate over all files in the directory
-    filenames = sorted(os.listdir(input_dir))
-
-    for filename in tqdm(filenames):
-        if filename.endswith(".gz"):
-            file_path = os.path.join(input_dir, filename)
-            # df = pd.read_csv(file_path, sep='\t', compression='gzip', names=field, index_col=False, header=None,
-            #                   na_values='NULL')
-            reader = pd.read_csv(file_path, sep='\t', compression='gzip', names=field, index_col=False, header=None, na_values='NULL', chunksize=1000)
-            for chunk in reader:
-                table = pa.Table.from_pandas(chunk)
-                if writer is None:
-                       writer = pq.ParquetWriter(output_file, table.schema)
-                writer.write_table(table)
-    if writer:
-        writer.close()
         
     
 def group_files_into_bins(source_dir, num_bins=10):
@@ -86,14 +58,14 @@ def process_bin(bin, output_file, k, downsample=None):
             df = df.sample(frac=1, random_state=42)
             df = np.array(df)
             if first_file:
-                dset = h5f.create_dataset('data', data=df, maxshape=(None, df.shape[1]), chunks=(3840, 685))
+                dset = h5f.create_dataset('data', data=df, maxshape=(None, df.shape[1]), chunks=(3840, 771))
                 first_file = False
             else:
                 dset.resize(dset.shape[0] + df.shape[0], axis=0)
                 dset[-df.shape[0]:] = df
 
 
-def convert_to_h5py(input_dir, output_file, bins=None, downsample=None, num_processes=2):
+def convert_to_h5py(input_dir, output_file, bins=None, downsample=None, num_processes=10):
     if bins is not None:
         filenames = bins
     else:
@@ -127,8 +99,9 @@ def stratify_login_days(input_dir):
         
 
 if __name__ == '__main__':
-    input_dir = 'data/testdata_240412_240528_minmax/'
-    out_file = 'data/traindata_240119_240411_minmax/dataset_'
-    # bins = group_files_into_bins(input_dir)
-    # convert_to_h5py(input_dir, out_file, bins, downsample=downsample_untreated_login)
-    stratify_login_days(input_dir)
+    input_dir = 'data/train_test_data/traindata_240119_240411_zscore/'
+    out_file = 'data/train_test_data/traindata_240119_240411_zscore/dataset_'
+    bins = group_files_into_bins(input_dir)
+    downsample_func = partial(downsample_untreated_login, col1=614, col2=632)
+    convert_to_h5py(input_dir, out_file, bins, downsample=downsample_func)
+    # stratify_login_days(input_dir)
