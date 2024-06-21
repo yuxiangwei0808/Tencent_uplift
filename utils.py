@@ -4,7 +4,7 @@ import os
 
 from models.efin import EFIN
 from models.dragonnet import DragonNet
-from models.mtmt import mtmt_res_emb_v0
+from models.mtmt import *
 
 
 def check_and_make_dir(path):
@@ -18,8 +18,8 @@ def save_model(model, optimizer, scaler, path, epoch, loss, metric_name, metrics
     metric_name = '' if metric_name is None else metric_name
     checkpoint = dict({
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scaler_state_dict': scaler.state_dict(),
+        # 'optimizer_state_dict': optimizer.state_dict(),
+        # 'scaler_state_dict': scaler.state_dict(),
         'epoch': epoch,
         'loss': loss,
         'metric': metrics})
@@ -35,7 +35,7 @@ def save_predictions(target, pred, treat, valid_metrics, metric_name, path, feat
 def get_model(name, model_kwargs=None):
     if 'efin' in name:
         if model_kwargs is None:
-            model_kwargs = {'input_dim': 622, 'hc_dim': 96, 'hu_dim': 96, 'is_self': False, 'act_type': 'elu'}
+            model_kwargs = {'input_dim': 622, 'hc_dim': 1024, 'hu_dim': 384, 'is_self': False, 'act_type': 'elu'}
         return EFIN(**model_kwargs), model_kwargs
     elif 'dragonnet' in name:
         if model_kwargs is None:
@@ -43,7 +43,7 @@ def get_model(name, model_kwargs=None):
         return DragonNet(**model_kwargs), model_kwargs
     elif 'mtmt' in name:
         if model_kwargs is None:
-            model_kwargs = {'name': 'res_emb_v0', 't_dim': 1, 'u_dim': 128, 'tu_dim':256}
-        return mtmt_res_emb_v0(), model_kwargs
+            model_kwargs = {'name': 'mtmt_res_emb_v0_MulAttn0', 't_dim': 1, 'u_dim': 128, 'tu_dim':256}
+        return mtmt_res_emb_v0_MulAttn0(), model_kwargs
     else:
         raise NotImplementedError

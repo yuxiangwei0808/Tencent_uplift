@@ -2,4 +2,6 @@ predictions/
 checkpoints/
 experiments/
 __pycache__/
+mlruns/
 *.png
+slurm_script.sh

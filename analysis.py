@@ -66,9 +66,9 @@ def analysis_and_plot_uplift_qini_curves(targets, predictions, treats):
     
     plt.figure()
     sns.displot(predictions, bins=100, kde=True)
-    plt.xlim(-0.1, 0.3)
+    # plt.xlim(-0.1, 0.3)
     plt.grid(True)
-    plt.savefig('u_trend.png', bbox_inches='tight')
+    plt.savefig('u_trend.png', bbox_inches='tight') 
     
     up_per = plot_uplift_by_percentile(targets, predictions, treats, kind='bar')
     plt.savefig('uplift_by_percentile.png', bbox_inches='tight')    
@@ -161,7 +161,8 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
 
 
 metric = 'QINI'
-source = 'predictions/full/zscore/efin/test/efin_96_96_0.001_'
+model_name = 'mtmt_res_emb_v0_MulAttn0'
+source = f'predictions/full/zscore/{model_name}/test/{model_name}_'
 
 targets, preds, treats, add_feats = [], [], [], []
 

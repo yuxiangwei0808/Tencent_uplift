@@ -19,7 +19,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.cuda.amp import GradScaler, autocast
 import torch.backends.cudnn as cudnn
 
-from data_loader import get_data, create_folds
+from data_loader import get_data, create_folds, get_data_criteo
 from metrics import uplift_at_k, weighted_average_uplift
 from utils import *
 
@@ -88,7 +88,7 @@ def setup_seed(seed):
 
 def train(local_rank, train_files, test_files, fold_idx):    
     start_epoch = 0
-    best_valid_metrics = {'QINI': 0., 'ROC-AUC': 0, 'PR-AUC': 0., 'AUUC': 0., 'WAU': 0., 'u_at_k': 0.}
+    best_valid_metrics = {'QINI': -10., 'ROC-AUC': 0, 'PR-AUC': 0., 'AUUC': -10., 'WAU': -10., 'u_at_k': -10.}
     result_early_stop = 0
     batch_size = 3840
     lamb = 1e-3
@@ -106,7 +106,7 @@ def train(local_rank, train_files, test_files, fold_idx):
     
     if args.enable_dist:
         torch.distributed.init_process_group(backend='nccl', init_method='env://', world_size=world_size, rank=local_rank)
-    torch.cuda.set_device(local_rank)
+    torch.cuda.set_device('cuda:0')
     device = torch.device(f'cuda:{local_rank}')
 
     setup_seed(seed)
@@ -122,9 +122,10 @@ def train(local_rank, train_files, test_files, fold_idx):
         start_epoch = checkpoint['epoch'] + 1 
         best_valid_metrics = checkpoint[metric]
 
-    logger.info(f'EFIN: Rank {local_rank} Start Training') 
+    logger.info(f'{args.model_name}: Rank {local_rank} Start Training') 
     for epoch in range(start_epoch, num_epoch):
         train_dataloader, valid_dataloader = get_data(train_files, test_files, target_treatment=None, target_task=None, batch_size=batch_size, dist=dist.is_initialized())
+        # train_dataloader, valid_dataloader = get_data_criteo(batch_size, fold_idx) 
         tr_loss = 0
         tr_steps = 0
         logger.info("Training Epoch: {}/{}".format(epoch + 1, int(num_epoch)))
@@ -153,9 +154,9 @@ def train(local_rank, train_files, test_files, fold_idx):
             else:
                 loss.backward()
                 optimizer.step()
-            scheduler.step()
 
             tr_loss += loss.item()
+        scheduler.step()
 
         # if local_rank == 0:
         logger.info("Epoch loss: {}, Avg loss: {}".format(tr_loss, tr_loss / tr_steps))
@@ -169,7 +170,7 @@ def train(local_rank, train_files, test_files, fold_idx):
             mlflow.log_metric(f'train_loss_{fold_idx}', tr_loss / tr_steps, epoch)
 
         is_early_stop = True
-        metric_names = ['QINI', 'ROC-AUC', 'u_at_k']
+        metric_names = ['QINI', 'u_at_k']
         for metric_name in metric_names:
             if valid_metrics[metric_name] > best_valid_metrics[metric_name]:
                 is_early_stop = False
@@ -190,7 +191,7 @@ def train(local_rank, train_files, test_files, fold_idx):
 
 if __name__ == "__main__":
     seed = 114514
-    num_epoch = 20
+    num_epoch = 50
     metric = 'QINI'
     cudnn.benchmark = True
     
@@ -206,6 +207,7 @@ if __name__ == "__main__":
     parser.add_argument('--enable_mlflow', action='store_true', default=False)
     parser.add_argument('--enable_amp', action='store_true', default=False)
     parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow'], help='all data or a subset of data')
+    parser.add_argument('--note', type=str, help='additional notes')
     args = parser.parse_args()
 
     setup_seed(seed)
@@ -227,7 +229,7 @@ if __name__ == "__main__":
     
     
     if args.data_type == 'full':
-        file_paths = [f'data/traindata_240119_240411_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)]
+        file_paths = [f'data/tencent_data_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)]
     elif args.data_type == 'backflow':
         file_paths = [f'data/traindata_backflow_240119_240411_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)]
     elif args.data_type == 'highactive':
@@ -254,7 +256,7 @@ if __name__ == "__main__":
         print(f'best metrics for fold {fold_idx}: {best_valid_metrics}')
         
         if args.enable_mlflow:
-            mlflow.log_metrics({'best_' + v for k, v in best_valid_metrics.items()}, step=fold_idx)
+            mlflow.log_metrics({'best_' + k: v for k, v in best_valid_metrics.items()}, step=fold_idx)
         
         ave_best_valid_metrics = {k: ave_best_valid_metrics[k] + best_valid_metrics[k] for k in best_valid_metrics}
     

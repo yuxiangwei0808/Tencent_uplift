@@ -15,6 +15,6 @@ class MLP(nn.Module):
     
     
 if __name__ == '__main__':
-    x = torch.randn(4, 1,)
+    x = torch.ones(4, ).to(torch.long)
     model = MLP(in_chans=1, hidden_chans=[16, 32, 64])
     print(model(x).shape)

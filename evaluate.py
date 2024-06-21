@@ -14,6 +14,7 @@ from models.efin import EFIN
 from models.dragonnet import DragonNet
 
 
+@torch.no_grad()
 def valid(model, valid_dataloader, device, metric, num_org_feat):
     model.eval()
     predictions = []
@@ -30,6 +31,8 @@ def valid(model, valid_dataloader, device, metric, num_org_feat):
         elif 'dragonnet' in args.model_name:
             y0, y1, _, _ = model(feature_list)
             u_tau = y1 - y0
+        elif 'mtmt' in args.model_name:
+            _, _, u_tau = model(feature_list, is_treat)
         else:
             raise NotImplementedError
         uplift = u_tau.squeeze()
@@ -79,10 +82,10 @@ def main(args):
     device = torch.device(f'cuda:{args.local_rank}')
     
     assert args.norm_type in args.ckpt_path
-    file_path = f'data/testdata_240412_240528_{args.norm_type}/dataset_{args.data_type}_0.hdf5'
+    file_path = f'data/tencent_data_{args.norm_type}/test_dataset_{args.data_type}_0.hdf5'
 
     
-    with open('data/OUT_COLUMN', 'r') as f:
+    with open('data/tencent_data_zscore/OUT_COLUMN', 'r') as f:
         labels = f.readlines()
     labels = [x.strip('\n') for x in labels]
     org_feat_idx = [i for i in range(len(labels)) if 'origin' in labels[i]]

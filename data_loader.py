@@ -5,10 +5,9 @@ import gzip
 import h5py
 import pandas as pd
 import numpy as np
-from torch.utils.data import DataLoader, Dataset, RandomSampler, DistributedSampler
+from torch.utils.data import DataLoader, Dataset, RandomSampler, DistributedSampler, Subset
 import torch
-from sklearn.model_selection import KFold
-from datasets import load_dataset
+from sklearn.model_selection import KFold, StratifiedKFold
 import threading
 from multiprocessing import Process, Queue, current_process
 
@@ -119,9 +118,9 @@ def collate_fn(batch, feature_index, treatment_index, task_index):
 
     return features_tensor, treatments_tensor, tasks_tensor
     
-
+ 
 def get_data(train_files, test_files, target_treatment, target_task, batch_size, dist=False, feature_group=None, addition_feat=None):
-    with open('data/OUT_COLUMN', 'r') as f:
+    with open('data/tencent_data_zscore/OUT_COLUMN', 'r') as f:
         labels = f.readlines()
     labels = [x.strip('\n') for x in labels]
     prefixes = [x.split('_')[0] for x in labels]
@@ -150,13 +149,36 @@ def get_data(train_files, test_files, target_treatment, target_task, batch_size,
     return train_loader, test_loader
 
 
-class FakeData(Dataset):
-    def __init__(self, x):
-        self.data = np.random.randn(10000, 685)
+def get_data_criteo(batch_size, fold_idx):
+    dataset = DatasetCriteo()
+    
+    skf = StratifiedKFold(n_splits=5)
+    indices = np.arange(len(dataset))
+    for i, (train_indices, test_indices) in enumerate(skf.split(indices, dataset.treat)):
+        if i == fold_idx:
+            train_set = Subset(dataset, train_indices)
+            test_set  = Subset(dataset, test_indices)
+
+            train_loader = DataLoader(train_set, shuffle=True, batch_size=batch_size, pin_memory=True, num_workers=16, drop_last=True)
+            test_loader  = DataLoader(test_set, shuffle=False, batch_size=batch_size, pin_memory=True, num_workers=16, drop_last=True)
+            return train_loader, test_loader
+
+
+class DatasetCriteo(Dataset):
+    def __init__(self):
+        self.data = np.load('data/tencent_data_zscore/criteo/criteo_data.npy').astype(np.float32)
+        self.treat = np.load('data/tencent_data_zscore/criteo/criteo_treat.npy', allow_pickle=True).astype(np.float32)
+        self.target = np.load('data/tencent_data_zscore/criteo/criteo_target.npy', allow_pickle=True).astype(np.float32)
+
+        self.data = torch.as_tensor(self.data)
+        self.treat =  torch.as_tensor(self.treat)
+        self.target = torch.as_tensor(self.target)
+    
     def __len__(self):
         return len(self.data)
+    
     def __getitem__(self, idx):
-        return self.data[idx]
+        return self.data[idx], self.treat[idx], self.target[idx]
    
 
 class CustomDatasetHdf5Multi(Dataset):

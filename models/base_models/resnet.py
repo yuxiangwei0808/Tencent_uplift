@@ -156,6 +156,7 @@ class ResNet(nn.Module):
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Linear(20, out_dim)
+        # self.fc = nn.Linear(1, out_dim)  # criteo 12 feature input
         self.feature_dim = 512 * block.expansion
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
