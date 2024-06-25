@@ -43,7 +43,7 @@ def get_model(name, model_kwargs=None):
         return DragonNet(**model_kwargs), model_kwargs
     elif 'mtmt' in name:
         if model_kwargs is None:
-            model_kwargs = {'name': 'mtmt_res_emb_v0_MulAttn0', 't_dim': 1, 'u_dim': 128, 'tu_dim':256}
-        return mtmt_res_emb_v0_MulAttn0(), model_kwargs
+            model_kwargs = {'name': 'mtmt_res_emb_v0', 't_dim': 1, 'u_dim': 128, 'tu_dim':256}
+        return mtmt_res_emb_v0(), model_kwargs
     else:
         raise NotImplementedError

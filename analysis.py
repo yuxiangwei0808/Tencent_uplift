@@ -161,7 +161,7 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
 
 
 metric = 'QINI'
-model_name = 'mtmt_res_emb_v0_MulAttn0'
+model_name = 'mtmt_res_emb_v0_4'
 source = f'predictions/full/zscore/{model_name}/test/{model_name}_'
 
 targets, preds, treats, add_feats = [], [], [], []

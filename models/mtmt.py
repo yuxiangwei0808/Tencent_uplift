@@ -7,7 +7,7 @@ from timm.layers import Mlp, ClassifierHead
 
 from .abs_mt_arch import AbsArchitecture
 from .base_models import *
-from .multi_head_attention import MultiHeadAttentionCustom
+from .multi_head_attention import MultiHeadAttn
 
 
 class ClsHead(nn.Module):
@@ -18,20 +18,10 @@ class ClsHead(nn.Module):
     
     def forward(self, x):
         return self.fc(self.pool(x).squeeze())
-    
-
-class feat_encoder(nn.Module):
-    def __init__(self, u_in_dims):
-        super().__init__()
-        self.enc = nn.Identity()
-        
-        
-    def forward(self, x):
-        return self.enc(x)
 
 
 class MMOE(AbsArchitecture):
-    def __init__(self, encoder_class, num_experts, task_names, in_feats, rep_dim, rep_grad, multi_input, device, **kwargs):
+    def __init__(self, encoder_class, num_experts, task_names, in_feats, rep_dim, rep_grad, **kwargs):
         r"""
         a Multi-gate MOE to encoder features
         Args:
@@ -41,7 +31,7 @@ class MMOE(AbsArchitecture):
             in_feats (list, int): list of inputs features if each expert only encode a feature group
             rep_dim (int): dimension of the initially encoded representation
         """
-        super().__init__(task_names, encoder_class, None, rep_grad, multi_input, device, **kwargs)
+        super().__init__(task_names, encoder_class, None, rep_grad, **kwargs)
         self.num_experts = num_experts
         self.task_names = task_names
         self.rep = nn.ModuleList([nn.Linear(c, rep_dim) for c in in_feats]) if isinstance(in_feats, list) else nn.Linear(in_feats, rep_dim)
@@ -118,14 +108,11 @@ class MTMT(nn.Module):
         self.V_w = nn.Linear(u_dim, tu_dim, bias=True)
         self.softmax = nn.Softmax(dim=-1)
         
-        # self.self_attention = nn.MultiheadAttention(embed_dim=u_dim, num_heads=8, kdim=t_dim, vdim=u_dim, batch_first=True)  # L B C input
-        # self.self_attention = nn.MultiheadAttention(embed_dim=tu_dim, num_heads=8)
-        self.self_attention = MultiHeadAttentionCustom(embed_dim=tu_dim, num_heads=8, batch_first=True, qdim=t_dim, kdim=u_dim, vdim=u_dim)  # L B C input
+        # self.self_attention = MultiHeadAttn(embed_dim=tu_dim, qdim=t_dim, kdim=u_dim, vdim=u_dim, num_head=8)
         
         self.tu_enhance = nn.Sequential(
             # TODO try add layers here or use attention
             Mlp(tu_dim, hidden_features=tu_dim // 2, norm_layer=tu_enhance_norm),
-            # Mlp(16, hidden_features=16 * 2, norm_layer=tu_enhance_norm),
         )
         
         self.tu_logit = ClsHead(tu_dim, num_treats)
@@ -154,12 +141,11 @@ class MTMT(nn.Module):
 
         # TODO try EFIN's self interaction but change dimension
         # TODO Use Torch's multihead self attention
-        # tu_feat, _ = self.self_attn(treat_feat_norm.unsqueeze(-1), user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))  # B N C
-        tu_feat, _ = self.self_attention(treat_feat_norm.unsqueeze(-1), user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))
+        tu_feat, _ = self.self_attn(treat_feat_norm.unsqueeze(-1), user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))  # B N C
+        # tu_feat, _ = self.self_attention(treat_feat_norm.unsqueeze(-1), user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))
 
         # enhance treatment-user feature
         tu_feat_enhanced = self.tu_enhance(tu_feat).transpose(-1, -2)  # B C N
-        # tu_feat_enhanced = self.tu_enhance(tu_feat.transpose(-1, -2)) # B C N
         
         # regularizer
         tu_tau = self.tu_tau(tu_feat_enhanced)
@@ -208,6 +194,14 @@ def mtmt_res_emb_v0_3():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=512)
 
+def mtmt_res_emb_v0_4():
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
+                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
+def mtmt_res_emb_v0_5():
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Identity(), task_names=['nextday_login'],
+                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
 def mtmt_res_emb_v0_tFeatChangeDim():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['nextday_login'],
                  num_treats=1, t_dim=16, u_dim=128, tu_dim=256)
@@ -224,10 +218,6 @@ def mtmt_res_emb_v0_MulAttn():
 def mtmt_res_emb_v0_MulAttn0():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=38), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=128)
-
-def mtmt_res_emb_v0_MulAttnCus():
-    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['nextday_login'],
-                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
 
 def mtmt_res_emb_v0_transEnhance():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['nextday_login'],
@@ -263,6 +253,11 @@ def mtmt_res_mlp_v0():
                  num_treats=1, t_dim=1, u_dim=user_feat_enc_hidden_dim * 8, tu_dim=256)
 
 def mtmt_res_mlp_v0_0():
+    user_feat_enc_hidden_dim = 16
+    return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=MLP(in_chans=1, hidden_chans=[16]), task_names=['nextday_login'],
+                 num_treats=1, t_dim=1, u_dim=user_feat_enc_hidden_dim * 8, tu_dim=256)
+
+def mtmt_res_mlp_v0_0_MulAttnCus():
     user_feat_enc_hidden_dim = 16
     return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=MLP(in_chans=1, hidden_chans=[16]), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=user_feat_enc_hidden_dim * 8, tu_dim=256)

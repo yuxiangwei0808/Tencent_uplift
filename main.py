@@ -199,7 +199,7 @@ if __name__ == "__main__":
     parser.add_argument('--enable_dist', action='store_true', default=False)
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--world_size', type=int, default=1)
-    parser.add_argument('--fold_id', type=int, help='train the given fold')
+    parser.add_argument('--fold_id', type=int, nargs='+', help='train the given folds')
     parser.add_argument('--resume', action='store_true', default=False, help='resume training from checkpoint')
     parser.add_argument('--ckpt_path', type=str)
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
@@ -248,7 +248,7 @@ if __name__ == "__main__":
     fold_enumerator = enumerate(folds)
 
     for fold_idx, (train_files, test_files) in fold_enumerator:
-        if args.fold_id != None and fold_idx != args.fold_id:
+        if args.fold_id is not None and fold_idx not in args.fold_id:
             continue
         logger.info("Fold {} start".format(fold_idx))        
         
