@@ -123,7 +123,7 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, layers, hidden_dim, out_dim, num_classes=1000, zero_init_residual=False,
+    def __init__(self, block, layers, hidden_dim, out_dim, in_ch=1, num_classes=1000, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
                  norm_layer=None):
         super(ResNet, self).__init__()
@@ -142,7 +142,7 @@ class ResNet(nn.Module):
                              "or a 3-element tuple, got {}".format(replace_stride_with_dilation))
         self.groups = groups
         self.base_width = width_per_group
-        self.conv1 = nn.Conv1d(1, self.inplanes, kernel_size=7, stride=2, padding=3,
+        self.conv1 = nn.Conv1d(in_ch, self.inplanes, kernel_size=7, stride=2, padding=3,
                                bias=False)
         self.bn1 = norm_layer(self.inplanes)
         self.relu = nn.ReLU(inplace=True)
@@ -200,6 +200,9 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
+
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)

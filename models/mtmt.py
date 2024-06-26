@@ -2,10 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Union
 from timm.layers import Mlp, ClassifierHead
 
-from .abs_mt_arch import AbsArchitecture
 from .base_models import *
 from .multi_head_attention import MultiHeadAttn
 
@@ -18,60 +16,7 @@ class ClsHead(nn.Module):
     
     def forward(self, x):
         return self.fc(self.pool(x).squeeze())
-
-
-class MMOE(AbsArchitecture):
-    def __init__(self, encoder_class, num_experts, task_names, in_feats, rep_dim, rep_grad, **kwargs):
-        r"""
-        a Multi-gate MOE to encoder features
-        Args:
-            encoder_class (nn.Module): the encoder class of each expert. Can be a neural net or another MOE
-            num_experts (int): number of experts
-            task_names (list): names of tasks
-            in_feats (list, int): list of inputs features if each expert only encode a feature group
-            rep_dim (int): dimension of the initially encoded representation
-        """
-        super().__init__(task_names, encoder_class, None, rep_grad, **kwargs)
-        self.num_experts = num_experts
-        self.task_names = task_names
-        self.rep = nn.ModuleList([nn.Linear(c, rep_dim) for c in in_feats]) if isinstance(in_feats, list) else nn.Linear(in_feats, rep_dim)
-        self.expert_shared = nn.ModuleList([encoder_class(f) for f in in_feats])
-        if isinstance(in_feats, list):
-            assert len(in_feats) == num_experts, "each expert should have a corresponding feature length"
-            self.gate_specific = nn.ModuleDict({task: nn.Sequential(nn.Linear(in_feat, self.num_experts),
-                                                      nn.Softmax(dim=-1)) for task, in_feat in zip(self.task_names, in_feats)})
-        else:
-            self.gate_specific = nn.ModuleDict({task: nn.Sequential(nn.Linear(in_feats, self.num_experts),
-                                                      nn.Softmax(dim=-1)) for task in self.task_names})
-        self.decoders = nn.ModuleDict({task: nn.Linear(rep_dim, 1) for task in self.task_names})
-        
-    def forward(self, inputs: Union[torch.tensor, list], task_name : str =None):
-        # TODO use nn.embedding to encode inputs as EFIN
-        if isinstance(inputs, list):
-            # TODO extend this to arbitary number of experts for each feature group
-            assert len(inputs) == len(self.expert_shared), "number of experts should be equal the number of feature group"
-            inputs = [r(input) for r, input in zip(self.rep, inputs)]
-            experts_shared_rep = torch.stack([e(input) for e, input in zip(self.expert_shared, inputs)])
-        else:
-            inputs = self.rep(inputs)
-            experts_shared_rep = torch.stack([e(inputs) for e in self.expert_shared])
-            
-        out = {}
-        for task in self.task_names:
-            if task_name is not None and task != task_name:
-                continue
-            selector = self.gate_specific[task](torch.flatten(inputs, start_dim=1))
-            gate_rep = torch.einsum('ij..., ji -> j...', experts_shared_rep, selector)
-            gate_rep = self._prepare_rep(gate_rep, task, same_rep=False)
-            # out[task] = self.decoders[task](gate_rep)
-        return out
     
-    def get_share_params(self):
-        return self.expert_shared.parameters()
-
-    def zero_grad_share_params(self):
-        self.expert_shared.zero_grad(set_to_none=False)
-
 
 class MTMT(nn.Module):
     def __init__(self,
@@ -120,7 +65,7 @@ class MTMT(nn.Module):
         
         self.u_tau = nn.ModuleDict({name: ClsHead(u_dim, 1) for name in task_names})  # assume tasks are all binary or regression
     
-    def forward(self, user_input, treatment_input):        
+    def forward(self, user_input, treatment_input):
         user_feat = self.user_enc(user_input.unsqueeze(1))  # dict of tensors
         user_feat = {'nextday_login': user_feat}
 
@@ -134,8 +79,8 @@ class MTMT(nn.Module):
         u_logit = [self.u_tau[task](user_feat[task]) for task in self.task_names]
         
         user_feat_cat = torch.cat([t for t in user_feat.values()], dim=1)  # B C N
-        user_feat_norm  = user_feat_cat / torch.linalg.norm(user_feat_cat, dim=1, keepdim=True)
-        treat_feat_norm = treat_feat / torch.linalg.norm(treat_feat, dim=1, keepdim=True)
+        user_feat_norm  = user_feat_cat / (torch.linalg.norm(user_feat_cat, dim=1, keepdim=True) + 1e-6)
+        treat_feat_norm = treat_feat / (torch.linalg.norm(treat_feat, dim=1, keepdim=True) + 1e-6)
         # user_feat_norm = user_feat_cat
         # treat_feat_norm = treat_feat
 
