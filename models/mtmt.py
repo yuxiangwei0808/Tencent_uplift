@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from timm.layers import Mlp, ClassifierHead
 
 from .base_models import *
+from .mmoe import MMOE
 from .multi_head_attention import MultiHeadAttn
 
 
@@ -23,11 +24,12 @@ class MTMT(nn.Module):
                  user_feat_enc: nn.Module,
                  treat_feat_enc: nn.Module,
                  task_names: list,
-                 num_treats: int,
                  t_dim: int,
                  u_dim: int,
                  tu_dim: int,
+                 num_treats: int = 1,
                  tu_enhance_norm: bool = None,
+                 treat_feat_enc_s: nn.Module = None,
                 ):
         r"""
         Args:
@@ -47,39 +49,52 @@ class MTMT(nn.Module):
         self.task_names = task_names
         self.user_enc = user_feat_enc
         self.treatment_enc = treat_feat_enc
+        self.treatment_enc_s = treat_feat_enc_s
         
         self.Q_w = nn.Linear(t_dim, tu_dim, bias=True)
         self.K_w = nn.Linear(u_dim, tu_dim, bias=True)
         self.V_w = nn.Linear(u_dim, tu_dim, bias=True)
         self.softmax = nn.Softmax(dim=-1)
         
-        # self.self_attention = MultiHeadAttn(embed_dim=tu_dim, qdim=t_dim, kdim=u_dim, vdim=u_dim, num_head=8)
+        # self.self_attention = MultiHeadAttn(embed_dim=tu_dim, qdim=t_dim, kdim=u_dim, vdim=u_dim, num_head=4, attn_drop=0.2)
         
         self.tu_enhance = nn.Sequential(
             # TODO try add layers here or use attention
             Mlp(tu_dim, hidden_features=tu_dim // 2, norm_layer=tu_enhance_norm),
+            # MLP(tu_dim, [tu_dim * 2, tu_dim * 4, tu_dim * 2, tu_dim], drop_rate=0.2)
         )
         
-        self.tu_logit = ClsHead(tu_dim, num_treats)
-        self.tu_tau   = ClsHead(tu_dim, num_treats)
+        self.tu_logit = ClsHead(tu_dim, 1)
+        self.tu_tau   = ClsHead(tu_dim, 1)
+
+        if treat_feat_enc_s is not None:
+            self.tu_enhance_s = nn.Sequential(
+                Mlp(tu_dim, hidden_features=tu_dim // 2, norm_layer=tu_enhance_norm),
+            )
+            self.tu_logit_s = ClsHead(tu_dim, 1)
+            self.tu_tau_s   = ClsHead(tu_dim, 1)
         
         self.u_tau = nn.ModuleDict({name: ClsHead(u_dim, 1) for name in task_names})  # assume tasks are all binary or regression
     
-    def forward(self, user_input, treatment_input):
+    def forward(self, user_input, treat, treat_s=None):
         user_feat = self.user_enc(user_input.unsqueeze(1))  # dict of tensors
-        user_feat = {'nextday_login': user_feat}
+        user_feat = {'nextday_login': user_feat} if not isinstance(user_feat, dict) else user_feat
 
         if isinstance(self.treatment_enc, nn.Embedding):
-            treatment_input = treatment_input.to(torch.long)
-        elif treatment_input.dim() == 1:
-            treatment_input = treatment_input.unsqueeze(-1)
-        treat_feat = self.treatment_enc(treatment_input)  # B N
+            treat = treat.to(torch.long)
+            treat_s = treat_s.to(torch.long) if treat_s is not None else treat_s
+        elif treat.dim() == 1:
+            treat = treat.unsqueeze(-1)
+            treat_s = treat_s.unsqueeze(-1) if treat_s is not None else treat_s
+        treat_feat = self.treatment_enc(treat)  # B N
+        treat_feat_s = self.treatment_enc_s(treat_s) if treat_s is not None else ...
         assert treat_feat.dim() == 2
         
         u_logit = [self.u_tau[task](user_feat[task]) for task in self.task_names]
         
         user_feat_cat = torch.cat([t for t in user_feat.values()], dim=1)  # B C N
         user_feat_norm  = user_feat_cat / (torch.linalg.norm(user_feat_cat, dim=1, keepdim=True) + 1e-6)
+
         treat_feat_norm = treat_feat / (torch.linalg.norm(treat_feat, dim=1, keepdim=True) + 1e-6)
         # user_feat_norm = user_feat_cat
         # treat_feat_norm = treat_feat
@@ -95,6 +110,16 @@ class MTMT(nn.Module):
         # regularizer
         tu_tau = self.tu_tau(tu_feat_enhanced)
         tu_logit = self.tu_logit(tu_feat_enhanced)
+
+        if treat_s is not None:
+            # more specific treatments
+            treat_feat_norm_s = treat_feat_s / (torch.linalg.norm(treat_feat_s, dim=1, keepdim=True) + 1e-6)
+            tu_feat_s, _ = ...
+            tu_feat_enhanced_s = self.tu_enhance_s(tu_feat_s).transpose(-1, -2)
+            
+            tu_tau_s = self.tu_tau_s(tu_feat_enhanced_s)
+            tu_logit_s = self.tu_logit_s(tu_feat_enhanced_s)
+            return u_logit, tu_tau, tu_logit, tu_tau_s, tu_logit_s
         
         return u_logit, tu_tau, tu_logit
         
@@ -107,10 +132,12 @@ class MTMT(nn.Module):
         loss1 = F.mse_loss((1 - treatment_input) * u_logit[0].squeeze() + treatment_input * tu_logit.squeeze(), y_true)  # binary
         
         # ESN IPW regularize
+        # loss2 = F.binary_cross_entropy_with_logits(tu_logit.squeeze(), y_true * treatment_input) + F.binary_cross_entropy_with_logits(u_logit[0].squeeze(), y_true * (1 - treatment_input))
         
         # interfere the model not to directly classify samples for treatments
         loss3 = F.binary_cross_entropy_with_logits(tu_tau.squeeze(), 1 - treatment_input)  # binary
         
+        # return loss1 + loss2 * (loss1 / loss2).detach() + loss3 * (loss1 / loss3).detach()
         return loss1 + loss3
     
     
@@ -202,12 +229,23 @@ def mtmt_res_mlp_v0_0():
     return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=MLP(in_chans=1, hidden_chans=[16]), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=user_feat_enc_hidden_dim * 8, tu_dim=256)
 
-def mtmt_res_mlp_v0_0_MulAttnCus():
-    user_feat_enc_hidden_dim = 16
-    return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=MLP(in_chans=1, hidden_chans=[16]), task_names=['nextday_login'],
-                 num_treats=1, t_dim=1, u_dim=user_feat_enc_hidden_dim * 8, tu_dim=256)
-
 def mtmt_res_mlp_v0_1():
     user_feat_enc_hidden_dim = 16
     return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=MLP(in_chans=1, hidden_chans=[16, 32]), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=user_feat_enc_hidden_dim * 8, tu_dim=256)
+
+def mtmt_cnn_emb_v0():
+    return MTMT(user_feat_enc=cnn_simple(hidden_chans=[16, 32, 64, 128]), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
+                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
+def mtmt_cnn_emb_v1():
+    return MTMT(user_feat_enc=cnn_bottleneck_simple(hidden_chans=[16, 32, 64, 128]), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
+                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
+
+def mtmt_mmoe_emb_v0():
+    return MTMT(user_feat_enc=MMOE(encoder_class=resnet18, num_experts=4, task_names=['nextday_login'], in_feat=622, 
+                            enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None}},
+                            rep_grad=False), 
+                 treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
+                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)

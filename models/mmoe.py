@@ -20,7 +20,6 @@ class MMOE(AbsArchitecture):
         super().__init__(task_names, encoder_class, None, rep_grad, **kwargs)
         self.num_experts = num_experts
         self.task_names = task_names
-        assert len(task_names) == num_experts, "each task should have an expert"
 
         if len(enc_kwargs) > 1:
             # each expert will have separate kwargs

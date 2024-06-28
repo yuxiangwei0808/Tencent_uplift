@@ -8,7 +8,7 @@ class MLP(nn.Module):
         super().__init__()
         
         self.mlp = torchvision.ops.MLP(in_channels=in_chans, hidden_channels=hidden_chans, 
-                                        norm_layer=nn.BatchNorm1d, dropout=drop_rate)
+                                        norm_layer=nn.LayerNorm, dropout=drop_rate)
         
     def forward(self, x):
         return self.mlp(x)
