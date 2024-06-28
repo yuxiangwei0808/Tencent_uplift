@@ -13,11 +13,10 @@ class AbsArchitecture(nn.Module):
         decoders (dict): A dictionary of name-decoder pairs of type (:class:`str`, :class:`torch.nn.Module`).
         rep_grad (bool): If ``True``, the gradient of the representation for each task can be computed.
         multi_input (bool): Is ``True`` if each task has its own input data, otherwise is ``False``. 
-        device (torch.device): The device where model and data will be allocated. 
         kwargs (dict): A dictionary of hyperparameters of architectures.
      
     """
-    def __init__(self, task_name, encoder_class, decoders, rep_grad, multi_input, device, **kwargs):
+    def __init__(self, task_name, encoder_class, decoders, rep_grad, multi_input=False, **kwargs):
         super(AbsArchitecture, self).__init__()
         
         self.task_name = task_name
@@ -26,7 +25,6 @@ class AbsArchitecture(nn.Module):
         self.decoders = decoders
         self.rep_grad = rep_grad
         self.multi_input = multi_input
-        self.device = device
         self.kwargs = kwargs
         
         if self.rep_grad:
@@ -51,7 +49,7 @@ class AbsArchitecture(nn.Module):
                 continue
             ss_rep = s_rep[tn] if isinstance(s_rep, list) else s_rep
             ss_rep = self._prepare_rep(ss_rep, task, same_rep)
-            out[task] = self.decoders[task](ss_rep)
+            out[task] = self.decoders[task](ss_rep) if self.decoders is not None else out[task]
         return out
     
     def get_share_params(self):

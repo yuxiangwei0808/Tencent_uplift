@@ -105,7 +105,7 @@ class EFIN(nn.Module):
         c_prob = torch.sigmoid(c_logit)
 
         # uplift net
-        t_rep = self.t_rep(torch.ones_like(t_true))
+        t_rep = self.t_rep(t_true)
         xt, xt_weight = self.interaction_attn(t_rep, x_rep)
 
         u_last = self.u_fc(xt)
@@ -128,10 +128,8 @@ class EFIN(nn.Module):
         loss1 = F.mse_loss((1 - t_true) * uc + t_true * ut, y_true)
         loss2 = F.binary_cross_entropy_with_logits(t_logit, 1 - t_true)
         loss = loss1 + loss2
-        
         # loss_estr = F.binary_cross_entropy_with_logits(ut, y_true * t_true)
         # loss_escr = F.binary_cross_entropy_with_logits(uc, y_true * (1 - t_true))
-        
-        # loss = loss_estr * 0.5 + loss_escr * 0.1 + loss2
+        # loss_pspy = F.binary_cross_entropy_with_logits(t_logit, t_true)
 
         return loss

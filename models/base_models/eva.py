@@ -640,14 +640,62 @@ class Eva(nn.Module):
         x = self.norm(x)
         return x
 
-    def forward_head(self, x, pre_logits: bool = False):
-        if self.global_pool:
-            x = x[:, self.num_prefix_tokens:].mean(dim=1) if self.global_pool == 'avg' else x[:, 0]
-        x = self.fc_norm(x)
-        x = self.head_drop(x)
-        return x if pre_logits else self.head(x)
-
     def forward(self, x):
         x = self.forward_features(x)
-        # x = self.forward_head(x)
         return x
+
+
+def _create_eva(variant, pretrained=False, **kwargs):
+    out_indices = kwargs.pop('out_indices', 3)
+    model = Eva(**kwargs,)
+    return model
+
+
+def eva02_tiny_patch14_224(pretrained=False, **kwargs) -> Eva:
+    model_args = dict(
+        img_size=224,
+        patch_size=14,
+        embed_dim=192,
+        depth=12,
+        num_heads=3,
+        mlp_ratio=4 * 2 / 3,
+        swiglu_mlp=True,
+        use_rot_pos_emb=True,
+        ref_feat_shape=(16, 16),  # 224/14
+    )
+    model = _create_eva('eva02_tiny_patch14_224', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+def eva02_small_patch14_224(pretrained=False, **kwargs) -> Eva:
+    model_args = dict(
+        img_size=224,
+        patch_size=14,
+        embed_dim=384,
+        depth=12,
+        num_heads=6,
+        mlp_ratio=4 * 2 / 3,
+        swiglu_mlp=True,
+        use_rot_pos_emb=True,
+        ref_feat_shape=(16, 16),  # 224/14
+    )
+    model = _create_eva('eva02_small_patch14_224', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+def eva02_base_patch14_224(pretrained=False, **kwargs) -> Eva:
+    model_args = dict(
+        img_size=224,
+        patch_size=14,
+        embed_dim=768,
+        depth=12,
+        num_heads=12,
+        qkv_fused=False,
+        mlp_ratio=4 * 2 / 3,
+        swiglu_mlp=True,
+        scale_mlp=True,
+        use_rot_pos_emb=True,
+        ref_feat_shape=(16, 16),  # 224/14
+    )
+    model = _create_eva('eva02_base_patch14_224', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model

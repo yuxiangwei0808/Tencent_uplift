@@ -65,7 +65,7 @@ class PatchEmbed(nn.Module):
 
     def feat_ratio(self, as_scalar=True) -> Union[Tuple[int, int], int]:
         if as_scalar:
-            return max(self.patch_size)
+            return self.patch_size
         else:
             return self.patch_size
 
