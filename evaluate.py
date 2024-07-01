@@ -14,6 +14,7 @@ from models.efin import EFIN
 from models.dragonnet import DragonNet
 
 
+@torch.no_grad()
 def valid(model, valid_dataloader, device, metric, num_org_feat):
     model.eval()
     predictions = []
@@ -22,7 +23,14 @@ def valid(model, valid_dataloader, device, metric, num_org_feat):
     add_features = []
 
     for step, (X, T, valid_label) in enumerate(tqdm(valid_dataloader)):
-        feature_list = X[:, :-num_org_feat].to(device)
+        if isinstance(X, list):
+            feature_list = [X[0][:, :-num_org_feat], X[1]]
+            feature_list = [x.to(device) for x in feature_list]
+            add_features.extend(X[0][:, -num_org_feat:].numpy())
+        else:
+            feature_list = X[:, :-num_org_feat].to(device)
+            add_features.extend(X[:, -num_org_feat:].numpy())
+
         is_treat = T.to(device)
         label_list = valid_label.to(device)
         if 'efin' in args.model_name:
@@ -30,6 +38,8 @@ def valid(model, valid_dataloader, device, metric, num_org_feat):
         elif 'dragonnet' in args.model_name:
             y0, y1, _, _ = model(feature_list)
             u_tau = y1 - y0
+        elif 'mtmt' in args.model_name:
+            _, _, u_tau = model(feature_list, is_treat)
         else:
             raise NotImplementedError
         uplift = u_tau.squeeze()
@@ -37,8 +47,7 @@ def valid(model, valid_dataloader, device, metric, num_org_feat):
         predictions.extend(uplift.detach().cpu())
         true_labels.extend(label_list.detach().cpu().numpy())
         is_treatment.extend(is_treat.detach().cpu().numpy())
-        add_features.extend(X[:, -num_org_feat:].numpy())
-
+        
     true_labels = np.array(true_labels)
     predictions = torch.tensor(predictions)
     is_treatment = np.array(is_treatment)
@@ -72,22 +81,26 @@ def valid(model, valid_dataloader, device, metric, num_org_feat):
 def main(args):    
     seed = 114514
     cudnn.benchmark = True
-    batch_size = 3840
+    batch_size = 3840 * 16
     metric = 'QINI'
     
     torch.cuda.set_device(args.local_rank)
     device = torch.device(f'cuda:{args.local_rank}')
     
     assert args.norm_type in args.ckpt_path
-    file_path = f'data/testdata_240412_240528_{args.norm_type}/dataset_{args.data_type}_0.hdf5'
-
+    file_path = [f'data/train_test_data/testdata_240412_240611_{args.norm_type}/dataset_{args.data_type}_0.hdf5']
     
-    with open('data/OUT_COLUMN', 'r') as f:
+    if args.data_type == 'combine0':
+        file_path = [f'data/testdata_240412_240528_zscore/dataset_backflow_0.hdf5']
+        file_path.append(f'data/testdata_240412_240528_zscore/dataset_lowactive_0.hdf5')
+        file_path.append(f'data/testdata_240412_240528_zscore/dataset_midactive_0.hdf5')
+    
+    with open('data/train_test_data/OUT_COLUMN_new', 'r') as f:
         labels = f.readlines()
     labels = [x.strip('\n') for x in labels]
     org_feat_idx = [i for i in range(len(labels)) if 'origin' in labels[i]]
     
-    train_dataloader, valid_dataloader = get_data([file_path], [file_path], target_treatment=None, target_task=None, batch_size=batch_size, addition_feat=org_feat_idx)
+    train_dataloader, valid_dataloader = get_data([*file_path], [*file_path], feature_group=1, batch_size=batch_size, addition_feat=org_feat_idx)
     
     model, model_kawrgs = get_model(name=args.model_name)
     model = model.to(device)
@@ -110,7 +123,7 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt_path', type=str)
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
     parser.add_argument('--model_name', type=str, default='efin')
-    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow'], help='all data or a subset of data')
+    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'combine0'], help='all data or a subset of data')
     args = parser.parse_args()
     
     for metric in ['QINI', 'ROC-AUC', 'u_at_k']:
