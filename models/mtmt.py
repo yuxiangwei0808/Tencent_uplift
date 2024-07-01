@@ -33,7 +33,7 @@ class MTMT(nn.Module):
                 ):
         r"""
         Args:
-            user_feat_enc (nn.Module): an encoder class to encode features. The encoder can encode all features, or encode feature groups separately via MOE.
+            user_feat_enc (nn.Module, list): encoder class to encode features. The encoder can encode all features, or encode feature groups separately via MOE.
             treat_feat_enc (nn.Module): treatment feature encoder
             task_names (list): names of tasks
             num_treats (int): number of treatments
@@ -46,10 +46,11 @@ class MTMT(nn.Module):
         """
         super().__init__()
                 
-        self.task_names = task_names
+        self.task_names = set(task_names)
         self.user_enc = user_feat_enc
         self.treatment_enc = treat_feat_enc
         self.treatment_enc_s = treat_feat_enc_s
+        self.assert_success = False
         
         self.Q_w = nn.Linear(t_dim, tu_dim, bias=True)
         self.K_w = nn.Linear(u_dim, tu_dim, bias=True)
@@ -77,8 +78,22 @@ class MTMT(nn.Module):
         self.u_tau = nn.ModuleDict({name: ClsHead(u_dim, 1) for name in task_names})  # assume tasks are all binary or regression
     
     def forward(self, user_input, treat, treat_s=None):
-        user_feat = self.user_enc(user_input.unsqueeze(1))  # dict of tensors
-        user_feat = {'nextday_login': user_feat} if not isinstance(user_feat, dict) else user_feat
+        if isinstance(user_input, list):
+            # group features and apply different encoders
+            assert len(self.user_enc) == len(user_input), "number of groups of input should equal to the number of encoders"
+            user_feats = [self.user_enc[i](user_input[i]) for i in range(len(user_input))]
+            if not isinstance(user_feats[0], dict):
+                user_feats = [{'nextday_login': feat} for feat in user_feats]
+            if not self.assert_success:
+                assert all(set(d.keys()) == self.task_names for d in user_feats), "all encodes features should have the same tasks"
+                self.assert_success = True
+            
+            user_feat = {}
+            for task in self.task_names:
+                user_feat[task] = torch.cat([d[task] for d in user_feats], dim=-1)
+        else:
+            user_feat = self.user_enc(user_input)  # dict of tensors
+            user_feat = {'nextday_login': user_feat} if not isinstance(user_feat, dict) else user_feat
 
         if isinstance(self.treatment_enc, nn.Embedding):
             treat = treat.to(torch.long)
@@ -167,7 +182,7 @@ def mtmt_res_emb_v0_3():
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=512)
 
 def mtmt_res_emb_v0_4():
-    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
 
 def mtmt_res_emb_v0_5():
@@ -242,10 +257,15 @@ def mtmt_cnn_emb_v1():
     return MTMT(user_feat_enc=cnn_bottleneck_simple(hidden_chans=[16, 32, 64, 128]), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
 
-
 def mtmt_mmoe_emb_v0():
     return MTMT(user_feat_enc=MMOE(encoder_class=resnet18, num_experts=4, task_names=['nextday_login'], in_feat=622, 
                             enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None}},
                             rep_grad=False), 
                  treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
+def mtmt_res_cnn_emb_v0():
+    return MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=16), cnn_simple(hidden_chans=[16, 32, 64, 128], in_chans=9, strides=[1, 1, 2, 1])]), 
+                treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
+                task_names=['nextday_login'],
+                num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
