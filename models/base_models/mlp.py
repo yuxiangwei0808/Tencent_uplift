@@ -4,14 +4,18 @@ import torchvision
 
 
 class MLP(nn.Module):
-    def __init__(self, in_chans: int, hidden_chans: list, drop_rate: int=0):
+    def __init__(self, in_chans: int, hidden_chans: list, drop_rate: int=0, transpose=False):
         super().__init__()
         
         self.mlp = torchvision.ops.MLP(in_channels=in_chans, hidden_channels=hidden_chans, 
-                                        norm_layer=nn.LayerNorm, dropout=drop_rate)
-        
+                                        norm_layer=nn.LayerNorm, dropout=drop_rate)        
+        self.transpose = transpose
+
     def forward(self, x):
-        return self.mlp(x)
+        x = self.mlp(x)
+        if self.transpose:
+            x = x.permute(0, 2, 1)
+        return x
     
     
 if __name__ == '__main__':

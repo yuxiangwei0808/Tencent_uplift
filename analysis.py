@@ -71,7 +71,7 @@ def analysis_and_plot_uplift_qini_curves(targets, predictions, treats):
     plt.savefig('u_trend.png', bbox_inches='tight') 
     
     up_per = plot_uplift_by_percentile(targets, predictions, treats, kind='bar')
-    plt.savefig('uplift_by_percentile.png', bbox_inches='tight')    
+    plt.savefig('uplift_by_percentile.png', bbox_inches='tight')
     
     qini_disp = plot_qini_curve(targets, predictions, treats)
     plt.savefig('qini.png', bbox_inches='tight')
@@ -161,15 +161,16 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
 
 
 metric = 'QINI'
-model_name = 'mtmt_res_emb_v0_4'
-source = f'predictions/full/zscore/{model_name}/test/{model_name}_'
+model_name = 'mtmt_res_emb_v0_4_0'
+source = f'predictions/full/zscore/{model_name}/test/'
 
 targets, preds, treats, add_feats = [], [], [], []
 
-
+        
 for i in range(5):
-    predictions = np.load(source + f'{i}_{metric}.npz')
-    target, pred, treat, add_feat = predictions['target'], predictions['pred'], predictions['treat'], predictions['feature'][:, 1]
+    predictions = np.load(source + f'{model_name}_{i}_{metric}.npz')
+    target, pred, treat = predictions['target'], predictions['pred'], predictions['treat']
+    add_feat = np.load(source + 'add_features.npz')['feature'][:, 1]
     targets.append(target)
     preds.append(pred)
     treats.append(treat)

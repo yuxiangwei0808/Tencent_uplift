@@ -1,12 +1,20 @@
 import torch
 import torch.nn as nn
 from models.mtmt import *
+from models.mmoe import MMOE
 
-x = torch.randn(3840, 622)
+x = torch.randn(1, 622).cuda()
 t = torch.ones(1)
-user_feat_enc_hidden_dim=16
-# model = MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['nextday_login'],
-#                  num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
-model = MMOE(encoder_class=resnet18, num_experts=1)
 
-print(model(x, torch.zeros(3840)))
+x2 = torch.randn(1, 9, 35)
+
+model = vit_tiny_patch2_224(img_size=622, in_chans=1).cuda()
+y = model(x)
+print(y.shape)
+# model = MMOE(encoder_class=resnet18, 
+#              num_experts=4, task_names=['1'], in_feat=622, 
+#              enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None}},
+#              rep_grad=False)
+
+y = model([x, x2], t)
+print(y.shape)

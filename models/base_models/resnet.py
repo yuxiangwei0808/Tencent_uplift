@@ -6,6 +6,7 @@ try:
     from torchvision.models.utils import load_state_dict_from_url
 except:
     from torch.hub import load_state_dict_from_url
+from timm.layers import DropPath
 
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
@@ -84,7 +85,7 @@ class Bottleneck(nn.Module):
     __constants__ = ['downsample']
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
-                 base_width=64, dilation=1, norm_layer=None):
+                 base_width=64, dilation=1, norm_layer=None, drop=0.):
         super(Bottleneck, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm1d
@@ -99,7 +100,7 @@ class Bottleneck(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
-        self.drop_out = nn.Dropout(drop) if drop > 0 else nn.Identity()
+        self.drop_out = nn.DropPath(drop) if drop > 0 else nn.Identity()
 
     def forward(self, x):
         identity = x
