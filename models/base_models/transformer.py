@@ -797,7 +797,10 @@ class VisionTransformer(nn.Module):
         return x if pre_logits else self.head(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
         x = self.forward_features(x)
+        x = x.permute(0, 2, 1)
         # x = self.forward_head(x)
         return x
 
@@ -879,7 +882,26 @@ def resize_pos_embed(
     )
     
 
-def trans_tiny():
-    ...
-    
+def vit_tiny_patch2_224(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    """ ViT-Tiny (Vit-Ti/16)
+    """
+    model_args = dict(patch_size=8, embed_dim=192, depth=8, num_heads=3)
+    model = VisionTransformer(**dict(model_args, **kwargs))
+    return model
+
+def vit_small_patch4_224(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    """ ViT-Small (ViT-S/32)
+    """
+    model_args = dict(patch_size=8, embed_dim=384, depth=12, num_heads=6)
+    model = VisionTransformer(**dict(model_args, **kwargs))
+    return model
+
+def vit_base_patch4_224(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    """ ViT-Base (ViT-B/32) from original paper (https://arxiv.org/abs/2010.11929).
+    ImageNet-1k weights fine-tuned from in21k, source https://github.com/google-research/vision_transformer.
+    """
+    model_args = dict(patch_size=8, embed_dim=768, depth=12, num_heads=12)
+    model = VisionTransformer(**dict(model_args, **kwargs))
+    return model
+
     

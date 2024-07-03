@@ -1,5 +1,8 @@
 predictions/
 checkpoints/
 experiments/
+tmp/
+legacy/
 __pycache__/
 *.png
+*.sh

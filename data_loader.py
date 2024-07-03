@@ -32,7 +32,7 @@ def create_folds(file_paths, n_folds=5):
     return folds
 
 
-def collate_fn(batch, feature_index, treatment_index, task_index, group_discrete=False):
+def collate_fn(batch, feature_index, treatment_index, task_index, group_discrete=False, pad=False):
     # Using list comprehensions for efficiency
     batch = np.stack(batch, axis=0)
     features = batch[:, feature_index]
@@ -45,11 +45,14 @@ def collate_fn(batch, feature_index, treatment_index, task_index, group_discrete
     tasks_tensor = torch.as_tensor(tasks, dtype=torch.float32).squeeze()
     
     if group_discrete:
-        grouped_disc_feature = [batch[:, indices] for indices in feature_groups.groups.values()]
-        # pad differnt groups features to the same length according to group_area
-        grouped_disc_feature = [np.pad(f, ((0, 0), (0, 35 - f.shape[-1])), 'constant', constant_values=0)[:, None, :] for f in grouped_disc_feature]
-        grouped_disc_feature = np.concatenate(grouped_disc_feature, axis=1)  # B 9 35
-        grouped_disc_feature = torch.as_tensor(grouped_disc_feature, dtype=torch.float)
+        if pad:
+            grouped_disc_feature = [batch[:, indices] for indices in feature_groups.groups.values()]
+            # pad differnt groups features to the same length according to group_area
+            grouped_disc_feature = [np.pad(f, ((0, 0), (0, 35 - f.shape[-1])), 'constant', constant_values=0)[:, None, :] for f in grouped_disc_feature]
+            grouped_disc_feature = np.concatenate(grouped_disc_feature, axis=1)  # B 9 35
+            grouped_disc_feature = torch.as_tensor(grouped_disc_feature, dtype=torch.float32)
+        else:
+            grouped_disc_feature = torch.as_tensor(batch[:, feature_groups.indices])
         
         return (features_tensor, grouped_disc_feature), treatments_tensor, tasks_tensor
 
@@ -72,7 +75,7 @@ class feature_groups:
     indices = list(range(685, 770))
 
 
-def get_data(train_files, test_files, target_treatment=None, target_task=None, batch_size=3840, dist=False, feature_group=None, addition_feat=None):
+def get_data(train_files, test_files, target_treatment=None, target_task=None, batch_size=3840, dist=False, feature_group=None, addition_feat=None, pad=False):
     with open('data/train_test_data/OUT_COLUMN_new', 'r') as f:
         labels = f.readlines()
     labels = [x.strip('\n') for x in labels]
@@ -83,13 +86,13 @@ def get_data(train_files, test_files, target_treatment=None, target_task=None, b
     feature_index = [idx for idx, elem in enumerate(labels) if elem[:3] == 'fea']
     if feature_group != None:
         feature_index = list(filter(lambda i: i not in list(range(537, 607)) + feature_groups.indices, feature_index))
-        collate = partial(collate_fn, feature_index=feature_index, treatment_index=treatment_index, task_index=task_index, group_discrete=True)
+        collate = partial(collate_fn, feature_index=feature_index, treatment_index=treatment_index, task_index=task_index, group_discrete=True, pad=pad)
     else:
         # feature_index = [idx for idx, elem in enumerate(labels) if elem[:3] == 'fea']
         feature_index = list(filter(lambda i: i not in list(range(537, 607)), feature_index))  # filter out columns that are used for AI accompany
         collate = partial(collate_fn, feature_index=feature_index, treatment_index=treatment_index, task_index=task_index)
     
-    if addition_feat is not None:
+    if addition_feat is not None:  # return additional features that can be used for further analysis
         feature_index.extend(addition_feat)
     
     train_set = CustomDatasetHdf5MultiChunk(train_files, chunk_size=3840 * 16)

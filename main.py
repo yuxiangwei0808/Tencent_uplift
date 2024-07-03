@@ -98,7 +98,7 @@ def train(local_rank, train_files, test_files, fold_idx):
     start_epoch = 0
     best_valid_metrics = {'QINI': 0., 'ROC-AUC': 0, 'PR-AUC': 0., 'AUUC': 0., 'WAU': 0., 'u_at_k': 0.}
     result_early_stop = 0
-    batch_size = 3840 * 8
+    batch_size = 3840 * 4
     lamb = 1e-3
     learning_rate = 0.001
     if torch.cuda.is_available():
