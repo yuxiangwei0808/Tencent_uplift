@@ -8,6 +8,8 @@ except:
     from torch.hub import load_state_dict_from_url
 from timm.layers import DropPath
 
+from .disc_encoder import DiscEncoder
+
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
            'resnet152', 'resnext50_32x4d', 'resnext101_32x8d',
@@ -129,11 +131,13 @@ class Bottleneck(nn.Module):
 class ResNet(nn.Module):
     def __init__(self, block, layers, hidden_dim, out_dim=None, in_ch=1, num_classes=1000, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
-                 norm_layer=None, drop=0.):
+                 norm_layer=None, drop=0., disc_encoder=None):
         super(ResNet, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm1d
         self._norm_layer = norm_layer
+
+        self.disc_encoder = disc_encoder
 
         self.inplanes = hidden_dim
         self.dilation = 1
@@ -204,6 +208,11 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        if self.disc_encoder is not None:
+            # encode the discrete features and add them back to the tensor
+            assert isinstance(x, list) and len(x) == 2
+            x = torch.cat((x[0], self.disc_encoder(x[1])), dim=-1)
+
         if x.dim() == 2:
             x = x.unsqueeze(1)
 

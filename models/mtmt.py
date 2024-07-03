@@ -51,6 +51,9 @@ class MTMT(nn.Module):
         self.treatment_enc = treat_feat_enc
         self.treatment_enc_s = treat_feat_enc_s
         self.assert_success = False
+        self.u_tau = nn.ModuleDict({name: ClsHead(u_dim, 1) for name in task_names})  # assume tasks are all binary or regression
+
+        u_dim *= len(self.task_names)  # since we cat the output of different tasks
         
         self.Q_w = nn.Linear(t_dim, tu_dim, bias=True)
         self.K_w = nn.Linear(u_dim, tu_dim, bias=True)
@@ -74,16 +77,16 @@ class MTMT(nn.Module):
             )
             self.tu_logit_s = ClsHead(tu_dim, 1)
             self.tu_tau_s   = ClsHead(tu_dim, 1)
-        
-        self.u_tau = nn.ModuleDict({name: ClsHead(u_dim, 1) for name in task_names})  # assume tasks are all binary or regression
-    
+
+
     def forward(self, user_input, treat, treat_s=None):
-        if isinstance(user_input, list):
+        if isinstance(self.user_enc, nn.ModuleList):
             # group features and apply different encoders
             assert len(self.user_enc) == len(user_input), "number of groups of input should equal to the number of encoders"
             user_feats = [self.user_enc[i](user_input[i]) for i in range(len(user_input))]
             if not isinstance(user_feats[0], dict):
                 user_feats = [{'nextday_login': feat} for feat in user_feats]
+                
             if not self.assert_success:
                 assert all(set(d.keys()) == self.task_names for d in user_feats), "all encodes features should have the same tasks"
                 self.assert_success = True
@@ -98,15 +101,15 @@ class MTMT(nn.Module):
         if isinstance(self.treatment_enc, nn.Embedding):
             treat = treat.to(torch.long)
             treat_s = treat_s.to(torch.long) if treat_s is not None else treat_s
-        elif treat.dim() == 1:
-            treat = treat.unsqueeze(-1)
-            treat_s = treat_s.unsqueeze(-1) if treat_s is not None else treat_s
+        
         treat_feat = self.treatment_enc(treat)  # B N
         treat_feat_s = self.treatment_enc_s(treat_s) if treat_s is not None else ...
-        assert treat_feat.dim() == 2
         
-        u_logit = [self.u_tau[task](user_feat[task]) for task in self.task_names]
+        u_logit = {task: self.u_tau[task](user_feat[task]) for task in self.task_names}
         
+        # TODO try add or weighted add (linear) insteand of cat
+        # TODO maybe we need to calculate a tu_logit for each task
+        # TODO ablate norm dimension
         user_feat_cat = torch.cat([t for t in user_feat.values()], dim=1)  # B C N
         user_feat_norm  = user_feat_cat / (torch.linalg.norm(user_feat_cat, dim=1, keepdim=True) + 1e-6)
 
@@ -115,9 +118,8 @@ class MTMT(nn.Module):
         # treat_feat_norm = treat_feat
 
         # TODO try EFIN's self interaction but change dimension
-        # TODO Use Torch's multihead self attention
-        # tu_feat, _ = self.self_attn(treat_feat_norm.unsqueeze(-1), user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))  # B N C
-        tu_feat, _ = self.self_attention(treat_feat_norm.unsqueeze(-1), user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))
+        treat_feat_norm = treat_feat_norm.unsqueeze(-1) if treat_feat_norm.dim() == 2 else treat_feat_norm.transpose(-1, -2)
+        tu_feat, _ = self.self_attention(treat_feat_norm, user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))
 
         # enhance treatment-user feature
         tu_feat_enhanced = self.tu_enhance(tu_feat).transpose(-1, -2)  # B C N
@@ -144,7 +146,9 @@ class MTMT(nn.Module):
         
         u_logit, tu_tau, tu_logit = self.forward(user_input, treatment_input)
         
-        loss1 = F.mse_loss((1 - treatment_input) * u_logit[0].squeeze() + treatment_input * tu_logit.squeeze(), y_true)  # binary
+        assert len(u_logit) == 1
+        loss1 = F.mse_loss((1 - treatment_input) * u_logit['nextday_login'].squeeze() + treatment_input * tu_logit.squeeze(), y_true)  # binary
+        # (1 - treatment_input[:, 0]) * u_logit['nextday_login'].squeeze() 
         
         # ESN IPW regularize
         # loss2 = F.binary_cross_entropy_with_logits(tu_logit.squeeze(), y_true * treatment_input) + F.binary_cross_entropy_with_logits(u_logit[0].squeeze(), y_true * (1 - treatment_input))
@@ -261,6 +265,10 @@ def mtmt_cnn_emb_v1():
     return MTMT(user_feat_enc=cnn_bottleneck_simple(hidden_chans=[16, 32, 64, 128]), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
 
+def mtmt_vit_emb_v0():
+    return MTMT(user_feat_enc=vit_tiny_patch2_224(img_size=622, in_chans=1), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
+                 num_treats=1, t_dim=1, u_dim=192, tu_dim=256)
+
 def mtmt_mmoe_emb_v0():
     return MTMT(user_feat_enc=MMOE(encoder_class=resnet18, num_experts=4, task_names=['nextday_login'], in_feat=622, 
                             enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None}},
@@ -269,24 +277,85 @@ def mtmt_mmoe_emb_v0():
                  num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
 
 def mtmt_res_cnn_emb_v0():
-    return MTMT(user_feat_enc=[resnet18(hidden_dim=16), cnn_simple(hidden_chans=[16, 32, 64, 128], in_chans=9, strides=[1, 1, 2, 1])], 
-                treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
-                task_names=['nextday_login'],
-                num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
-
-def mtmt_vit_emb_v0():
-    return MTMT(user_feat_enc=vit_tiny_patch2_224(img_size=622, in_chans=1), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
-                 num_treats=1, t_dim=1, u_dim=192, tu_dim=256)
-
-def mtmt_res_cnn_emb_v0():
+    # seperately process discrete feature; zero-encode and pad the discrete feature
     return MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=16), cnn_simple(hidden_chans=[16, 32, 64, 128], in_chans=9, strides=[1, 1, 2, 1])]), 
                 treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
                 task_names=['nextday_login'],
                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
 
-
-def mtmt_res_cnn_emb_v0():
-    return MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=16), MLP(in_chans=35, hidden_chans=[46, 64, 96, 128], transpose=True)]), 
+def mtmt_res_cnn_emb_v1():
+    # seperately process discrete feature; zero-encode but not pad the discrete feature
+    return MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=16), cnn_simple(hidden_chans=[16, 32, 64, 128], in_chans=1, strides=[1, 1, 2, 1])]), 
                 treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
                 task_names=['nextday_login'],
                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
+def mtmt_res_disc__emb_v0():
+    # seperately encode discrete features and add back as the input to user_feat_enc
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, disc_encoder=DiscEncoder(embed_dim=8, out_shape='1d')),
+                treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
+                task_names=['nextday_login'],
+                num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
+def mtmt_res_disc_mlp__emb_v0():
+    return  MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=8), 
+                    DiscEncoder(embed_dim=8, out_shape='2d',
+                                enc=MLP(hidden_chans=[16, 32, 64], in_chans=9, transpose=True))
+                ]), 
+                treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
+                task_names=['nextday_login'],
+                num_treats=1, t_dim=1, u_dim=64, tu_dim=128)
+
+
+def mtmt_res_disc_mlp__emb_cnn_v0():
+    return  MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=8), 
+                    DiscEncoder(embed_dim=8, out_shape='2d',
+                                enc=MLP(hidden_chans=[16, 32, 64], in_chans=9, transpose=True))
+                ]), 
+                treat_feat_enc=cnn_simple(in_chans=1, hidden_chans=[4, 8, 16], strides=[1, 1, 1], encoder=nn.Embedding(num_embeddings=2, embedding_dim=8)),
+                task_names=['nextday_login'],
+                num_treats=1, t_dim=16, u_dim=64, tu_dim=128)
+
+def mtmt_res_disc_cnn__emb_v0():
+    return  MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=4), 
+                    DiscEncoder(embed_dim=8, out_shape='2d',
+                                enc=cnn_simple(hidden_chans=[12, 16, 32], in_chans=9, strides=[1, 2, 1]))
+                ]), 
+                treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
+                task_names=['nextday_login'],
+                num_treats=1, t_dim=1, u_dim=32, tu_dim=64)
+
+def mtmt_res_disc_cnn__emb_v0_0():
+    return  MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=8), 
+                    DiscEncoder(embed_dim=8, out_shape='2d',
+                                enc=cnn_simple(hidden_chans=[16, 32, 64], in_chans=9, strides=[1, 2, 1]))
+                ]), 
+                treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
+                task_names=['nextday_login'],
+                num_treats=1, t_dim=1, u_dim=64, tu_dim=128)
+
+def mtmt_res_disc_cnn__emb_v1():
+    return MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=16), 
+                    DiscEncoder(embed_dim=8, out_shape='1d',
+                                enc=cnn_simple(hidden_chans=[16, 32, 64, 128], in_chans=1, strides=[1, 1, 2, 1]))
+                ]), 
+                treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
+                task_names=['nextday_login'],
+                num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
+def mtmt_res_cnn_MLP_v0():
+    # seperately process discrete feature; zero-encode and pad the discrete feature
+    return MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=16), MLP(in_chans=9, hidden_chans=[16, 32, 64, 128], transpose=True)]), 
+                treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
+                task_names=['nextday_login'],
+                num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+
+def mtmt_res__emb_MLP_v0_4_0():
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), 
+                treat_feat_enc=MLP(in_chans=1, transpose=True, hidden_chans=[4, 8, 16], drop_rate=0.1, encoder=nn.Embedding(num_embeddings=2, embedding_dim=8)),
+                task_names=['nextday_login'], num_treats=1, t_dim=16, u_dim=128, tu_dim=256)
+
+def mtmt_res__emb_cnn_v0_4_0():
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), 
+                treat_feat_enc=cnn_simple(in_chans=1, hidden_chans=[4, 8, 16], strides=[1, 1, 1], encoder=nn.Embedding(num_embeddings=2, embedding_dim=8)),
+                task_names=['nextday_login'], num_treats=1, t_dim=16, u_dim=128, tu_dim=256)

@@ -3,6 +3,7 @@ from sklearn.metrics import *
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+import os
 
 from metrics import uplift_at_k, uplift_by_percentile
 from sklift.metrics import qini_auc_score, uplift_auc_score
@@ -60,24 +61,23 @@ def plot_and_save_precision_recall_vs_threshold(predictions, targets, filename='
     
 
 def analysis_and_plot_uplift_qini_curves(targets, predictions, treats):
-    uplift_perc, qini, auuc, u_at_k = analysis(targets, predictions, treats)
-    print(uplift_perc)
-    print('qini: {}, auuc: {}, u at 0.3: {}'.format(qini, auuc, u_at_k))
+    # uplift_perc, qini, auuc, u_at_k = analysis(targets, predictions, treats)
+    print(uplift_by_percentile(targets, preds, treats))
     
     plt.figure()
     sns.displot(predictions, bins=100, kde=True)
     # plt.xlim(-0.1, 0.3)
     plt.grid(True)
-    plt.savefig('u_trend.png', bbox_inches='tight') 
+    plt.savefig(f'{source_dir}/u_trend.png', bbox_inches='tight') 
     
     up_per = plot_uplift_by_percentile(targets, predictions, treats, kind='bar')
-    plt.savefig('uplift_by_percentile.png', bbox_inches='tight')
+    plt.savefig(f'{source_dir}/uplift_by_percentile.png', bbox_inches='tight')
     
     qini_disp = plot_qini_curve(targets, predictions, treats)
-    plt.savefig('qini.png', bbox_inches='tight')
+    plt.savefig(f'{source_dir}/qini.png', bbox_inches='tight')
     
     auuc_disp = plot_uplift_curve(targets, predictions, treats)
-    plt.savefig('uplift.png', bbox_inches='tight')
+    plt.savefig(f'{source_dir}/uplift.png', bbox_inches='tight')
 
 
 def analysis(targets, preds, treats):
@@ -140,14 +140,14 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     plt.grid(True)
     plt.xlabel('login days')
     plt.ylabel('QINI')
-    plt.savefig('qini_login.png')
+    plt.savefig(f'{source_dir}/qini_login.png')
     
     plt.figure()
     plt.plot(ranger, auucs)
     plt.grid(True)
     plt.xlabel('login days')
     plt.ylabel('AUUC')
-    plt.savefig('auuc_login.png')
+    plt.savefig(f'{source_dir}/auuc_login.png')
     
     fig, ax = plt.subplots()
     for p in percentiles:
@@ -157,16 +157,21 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     ax.grid(True)
     ax.set_xlabel('login days')
     ax.set_ylabel('uplifts')
-    plt.savefig('uplift_by_percentile_login.png')
+    plt.savefig(f'{source_dir}/uplift_by_percentile_login.png')
 
 
-metric = 'QINI'
-model_name = 'mtmt_res_emb_v0_4_0'
+metric = 'u_at_k'
+model_name = 'mtmt_res_disc_mlp__emb_v0'
 source = f'predictions/full/zscore/{model_name}/test/'
+
+source_dir = os.path.join(model_name, metric)
+if not os.path.isdir(source_dir):
+    os.makedirs(source_dir)
 
 targets, preds, treats, add_feats = [], [], [], []
 
-        
+u_at_k = qini = auuc = 0
+
 for i in range(5):
     predictions = np.load(source + f'{model_name}_{i}_{metric}.npz')
     target, pred, treat = predictions['target'], predictions['pred'], predictions['treat']
@@ -175,6 +180,11 @@ for i in range(5):
     preds.append(pred)
     treats.append(treat)
     add_feats.append(add_feat)
+    u_at_k += predictions['u_at_k']
+    qini += predictions['QINI']
+    auuc += predictions['AUUC']
+
+print('qini: {}, auuc: {}, u at 0.3: {}'.format(qini / 5, auuc / 5, u_at_k / 5))
 
 targets, preds, treats, add_feats = np.concatenate(targets, 0), np.concatenate(preds, 0), np.concatenate(treats, 0), np.concatenate(add_feats, 0)
 

@@ -18,7 +18,7 @@ class BasicBlock(nn.Module):
 
 
 class CNN(nn.Module):
-    def __init__(self, in_chans: int, hidden_chans: list, strides: list, drop_rate: int=0):
+    def __init__(self, in_chans: int, hidden_chans: list, strides: list, drop_rate: int=0, encoder=None):
         super().__init__()
         assert len(hidden_chans) == len(strides)
         self.cnns = nn.ModuleList([BasicBlock(in_chans, hidden_chans[0], drop_rate, strides[0])])
@@ -28,8 +28,13 @@ class CNN(nn.Module):
                 BasicBlock(hidden_chans[i - 1], hidden_chans[i], drop_rate, strides[i])
             )
         self.cnns = nn.Sequential(*self.cnns)
+        self.encoder = encoder
         
     def forward(self, x):
+        if self.encoder is not None:
+            assert x.dim() == 1
+            x = self.encoder(x.to(torch.long))
+            
         if x.dim() == 2:
             x = x.unsqueeze(1)
         return self.cnns(x)
@@ -68,8 +73,8 @@ class CNNBottleneck(nn.Module):
         return self.cnns(x)
 
 
-def cnn_simple(hidden_chans, in_chans=1, strides=[2, 2, 2, 2]):
-    return CNN(in_chans=in_chans, hidden_chans=hidden_chans, strides=strides, drop_rate=0.2)
+def cnn_simple(hidden_chans, in_chans=1, strides=[2, 2, 2, 2], **kwargs):
+    return CNN(in_chans=in_chans, hidden_chans=hidden_chans, strides=strides, drop_rate=0.2, **kwargs)
 
 def cnn_bottleneck_simple(hidden_chans):
     return CNNBottleneck(in_chans=1, hidden_chans=hidden_chans, drop_rate=0.2)

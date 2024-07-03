@@ -105,7 +105,7 @@ def get_data_(source_dir, target_treatment, target_task, fold_id, batch_size, nu
     return train_loader, test_loader
 
 
-def collate_fn(batch, feature_index, treatment_index, task_index, group_discrete=False):
+def collate_fn(batch, feature_index, treatment_index, task_index, group_discrete=False, pad=False):
     # Using list comprehensions for efficiency
     batch = np.stack(batch, axis=0)
     features = batch[:, feature_index]
@@ -118,12 +118,15 @@ def collate_fn(batch, feature_index, treatment_index, task_index, group_discrete
     tasks_tensor = torch.as_tensor(tasks, dtype=torch.float32).squeeze()
     
     if group_discrete:
-        grouped_disc_feature = [batch[:, indices] for indices in feature_groups.groups.values()]
-        # pad differnt groups features to the same length according to group_area
-        grouped_disc_feature = [np.pad(f, ((0, 0), (0, 35 - f.shape[-1])), 'constant', constant_values=0)[:, None, :] for f in grouped_disc_feature]
-        grouped_disc_feature = np.concatenate(grouped_disc_feature, axis=1)  # B 9 35
-        grouped_disc_feature = torch.as_tensor(grouped_disc_feature, dtype=torch.float)
-        
+        if pad:
+            grouped_disc_feature = [batch[:, indices] for indices in feature_groups.groups.values()]
+            # pad differnt groups features to the same length according to group_area
+            grouped_disc_feature = [np.pad(f, ((0, 0), (0, 35 - f.shape[-1])), 'constant', constant_values=0)[:, None, :] for f in grouped_disc_feature]
+            grouped_disc_feature = np.concatenate(grouped_disc_feature, axis=1)  # B 9 35
+            grouped_disc_feature = torch.as_tensor(grouped_disc_feature, dtype=torch.float)
+        else:
+            grouped_disc_feature = torch.as_tensor(batch[:, feature_groups.indices])
+            
         return (features_tensor, grouped_disc_feature), treatments_tensor, tasks_tensor
 
     return features_tensor, treatments_tensor, tasks_tensor
@@ -141,8 +144,10 @@ class feature_groups:
         'group_district': list(range(722, 726)),
         'group_area': list(range(726, 761)),
         'group_r': list(range(761, 770)),
+        # 'group_rank5': list(range(121, 184)),
     }
     indices = list(range(685, 770))
+    # indices += list(range(121, 184))
 
 def get_data(train_files, test_files, target_treatment=None, target_task=None, batch_size=3840, dist=False, feature_group=None, addition_feat=None):
     with open('data/train_test_data/OUT_COLUMN_new', 'r') as f:
@@ -150,12 +155,14 @@ def get_data(train_files, test_files, target_treatment=None, target_task=None, b
     labels = [x.strip('\n') for x in labels]
         
     treatment_index = [idx for idx, elem in enumerate(labels) if elem == 'treatment_next_iswarm']
+    # treatment_next_is_9aiwarmround
     task_index = [idx for idx, elem in enumerate(labels) if elem == 'label_nextday_login']
     
     feature_index = [idx for idx, elem in enumerate(labels) if elem[:3] == 'fea']
     if feature_group != None:
+        pad = True if 'pad' in feature_group else False
         feature_index = list(filter(lambda i: i not in list(range(537, 607)) + feature_groups.indices, feature_index))
-        collate = partial(collate_fn, feature_index=feature_index, treatment_index=treatment_index, task_index=task_index, group_discrete=True)
+        collate = partial(collate_fn, feature_index=feature_index, treatment_index=treatment_index, task_index=task_index, group_discrete=True, pad=pad)
     else:
         # feature_index = [idx for idx, elem in enumerate(labels) if elem[:3] == 'fea']
         feature_index = list(filter(lambda i: i not in list(range(537, 607)), feature_index))  # filter out columns that are used for AI accompany
