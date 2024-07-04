@@ -86,7 +86,7 @@ class MTMT(nn.Module):
             user_feats = [self.user_enc[i](user_input[i]) for i in range(len(user_input))]
             if not isinstance(user_feats[0], dict):
                 user_feats = [{'nextday_login': feat} for feat in user_feats]
-                
+
             if not self.assert_success:
                 assert all(set(d.keys()) == self.task_names for d in user_feats), "all encodes features should have the same tasks"
                 self.assert_success = True
@@ -105,7 +105,7 @@ class MTMT(nn.Module):
         treat_feat = self.treatment_enc(treat)  # B N
         treat_feat_s = self.treatment_enc_s(treat_s) if treat_s is not None else ...
         
-        u_logit = {task: self.u_tau[task](user_feat[task]) for task in self.task_names}
+        u_logit = {task: self.u_tau[task](user_feat[task]).squeeze() for task in self.task_names}
         
         # TODO try add or weighted add (linear) insteand of cat
         # TODO maybe we need to calculate a tu_logit for each task
@@ -125,8 +125,8 @@ class MTMT(nn.Module):
         tu_feat_enhanced = self.tu_enhance(tu_feat).transpose(-1, -2)  # B C N
         
         # regularizer
-        tu_tau = self.tu_tau(tu_feat_enhanced)
-        tu_logit = self.tu_logit(tu_feat_enhanced)
+        tu_tau = F.sigmoid(self.tu_tau(tu_feat_enhanced).squeeze())
+        tu_logit = self.tu_logit(tu_feat_enhanced).squeeze()
 
         if treat_s is not None:
             # more specific treatments
@@ -147,17 +147,23 @@ class MTMT(nn.Module):
         u_logit, tu_tau, tu_logit = self.forward(user_input, treatment_input)
         
         assert len(u_logit) == 1
+        tu_logit += u_logit['nextday_login'].detach()  # EFIN
         loss1 = F.mse_loss((1 - treatment_input) * u_logit['nextday_login'].squeeze() + treatment_input * tu_logit.squeeze(), y_true)  # binary
-        # (1 - treatment_input[:, 0]) * u_logit['nextday_login'].squeeze() 
+        # loss1 = F.mse_loss(1 - treatment_input[:, 0]) * u_logit['nextday_login'].squeeze() + treatment_input[:, 0] * tu_logit.squeeze(), y_true)
+        # loss1 = F.mse_loss(1 - treatment_input[:, 0]) * u_logit['nextday_login'].squeeze() + treatment_input[:, 0] * ((1 - treatment_input[:, 1]) * tu_logit.squeeze() + treatment_input[:, 1] * tu_logit_s.squeeze()), y_true)  # tu_logit_s directly models y_k
+        # loss1 = F.mse_loss(1 - treatment_input[:, 0]) * u_logit['nextday_login'].squeeze() + treatment_input[:, 0] * (tu_logit.squeeze() + treatment_input[:, 1] * tu_logit_s.squeeze()), y_true)  # tu_logit_s models difference over 5AI
         
         # ESN IPW regularize
-        # loss2 = F.binary_cross_entropy_with_logits(tu_logit.squeeze(), y_true * treatment_input) + F.binary_cross_entropy_with_logits(u_logit[0].squeeze(), y_true * (1 - treatment_input))
+        # loss2 = F.binary_cross_entropy_with_logits(tu_logit * tu_tau, y_true * treatment_input) + F.binary_cross_entropy_with_logits(u_logit['nextday_login'] * (1 - tu_tau), y_true * (1 - treatment_input))
         
         # interfere the model not to directly classify samples for treatments
-        loss3 = F.binary_cross_entropy_with_logits(tu_tau.squeeze(), 1 - treatment_input)  # binary
+        # loss3 = F.binary_cross_entropy_with_logits(tu_tau.squeeze(), 1 - treatment_input)  # binary
+
+        # inverse probability metric loss to mitigate gap between treated and control y0
+        loss4 = F.mse_loss((u_logit['nextday_login'] * treatment_input).mean(), (u_logit['nextday_login'] * (1 - treatment_input)).mean())
         
         # return loss1 + loss2 * (loss1 / loss2).detach() + loss3 * (loss1 / loss3).detach()
-        return loss1 + loss3
+        return loss1 + loss4 * (loss1 / loss4).detach()
     
     
     def self_attn(self, q, k, v):
