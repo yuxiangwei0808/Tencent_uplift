@@ -3,7 +3,26 @@ import numpy as np
 import pandas as pd
 
 
-def uplift_at_k(y_true, uplift, treatment, strategy, k=0.3):
+def metrics_mt(metric, y_true, uplift, treat, reduce=None):
+    # multi-treatment version
+    # `treat` should be N*T, where the first element denotes treatment/control
+
+    ind_control = treat[:, 0] == 0
+    ind_5ai = (treat[:, 0] == 1) & (treat[:, 1] == 0)
+    ind_9ai = (treat[:, 0] == 1) & (treat[:, 1] == 1)
+
+    score_5ai = metric(y_true[ind_control | ind_5ai], uplift[ind_control | ind_5ai], treat[:, 0][ind_control | ind_5ai])
+    score_9ai = metric(y_true[ind_control | ind_9ai], uplift[ind_control | ind_9ai], treat[:, 0][ind_control | ind_9ai])
+
+    if reduce == 'max':
+        return max(score_5ai, score_9ai)
+    elif reduce == 'mean':
+        return (score_5ai + score_9ai) * 0.5
+    else:
+        return score_5ai, score_9ai
+
+
+def uplift_at_k(y_true, uplift, treatment, strategy='overall', k=0.3):
     n_samples = len(y_true)
     order = np.argsort(uplift, kind='mergesort')[::-1]
 

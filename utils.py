@@ -35,7 +35,7 @@ def save_predictions(target, pred, treat, valid_metrics, metric_name, path, feat
 def get_model(name, model_kwargs=None):
     if 'efin' in name:
         if model_kwargs is None:
-            model_kwargs = {'input_dim': 622, 'hc_dim': 96, 'hu_dim': 96, 'is_self': False, 'act_type': 'elu'}
+            model_kwargs = {'input_dim': 629, 'hc_dim': 96, 'hu_dim': 96, 'is_self': False, 'act_type': 'elu'}
         return EFIN(**model_kwargs), model_kwargs
     elif 'dragonnet' in name:
         if model_kwargs is None:
@@ -47,3 +47,17 @@ def get_model(name, model_kwargs=None):
         return mtmt_res_emb_v0_4_0(), model_kwargs
     else:
         raise NotImplementedError
+
+
+def save_best(valid_metrics, best_valid_metrics, metric_names,
+             model, optimizer, scaler, ckpt_path, epoch, tr_loss, tr_steps,
+             true_labels, predictions, treatment, pred_path):
+    for metric_name in metric_names:         
+        if valid_metrics[metric_name] > best_valid_metrics[metric_name]:
+            is_early_stop = False
+            save_model(model, optimizer, scaler, ckpt_path, epoch, tr_loss / tr_steps, metric_name, valid_metrics)
+            save_predictions(true_labels, predictions, treatment, valid_metrics, metric_name, pred_path)
+            best_valid_metrics[metric_name] = valid_metrics[metric_name]
+            result_early_stop = 0
+
+    return best_valid_metrics, is_early_stop, result_early_stop

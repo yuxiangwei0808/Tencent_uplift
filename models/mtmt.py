@@ -102,8 +102,8 @@ class MTMT(nn.Module):
             treat = treat.to(torch.long)
             treat_s = treat_s.to(torch.long) if treat_s is not None else treat_s
         
-        treat_feat = self.treatment_enc(treat)  # B N
-        treat_feat_s = self.treatment_enc_s(treat_s) if treat_s is not None else ...
+        treat_feat = self.treatment_enc(treat)  # B N or B T N
+        treat_feat_s = self.treatment_enc_s(treat_s) if treat_s is not None else None
         
         u_logit = {task: self.u_tau[task](user_feat[task]).squeeze() for task in self.task_names}
         
@@ -117,7 +117,6 @@ class MTMT(nn.Module):
         # user_feat_norm = user_feat_cat
         # treat_feat_norm = treat_feat
 
-        # TODO try EFIN's self interaction but change dimension
         treat_feat_norm = treat_feat_norm.unsqueeze(-1) if treat_feat_norm.dim() == 2 else treat_feat_norm.transpose(-1, -2)
         tu_feat, _ = self.self_attention(treat_feat_norm, user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))
 
@@ -125,7 +124,7 @@ class MTMT(nn.Module):
         tu_feat_enhanced = self.tu_enhance(tu_feat).transpose(-1, -2)  # B C N
         
         # regularizer
-        tu_tau = F.sigmoid(self.tu_tau(tu_feat_enhanced).squeeze())
+        tu_tau = torch.sigmoid(self.tu_tau(tu_feat_enhanced).squeeze())
         tu_logit = self.tu_logit(tu_feat_enhanced).squeeze()
 
         if treat_s is not None:
@@ -148,8 +147,8 @@ class MTMT(nn.Module):
         
         assert len(u_logit) == 1
         tu_logit += u_logit['nextday_login'].detach()  # EFIN
-        loss1 = F.mse_loss((1 - treatment_input) * u_logit['nextday_login'].squeeze() + treatment_input * tu_logit.squeeze(), y_true)  # binary
-        # loss1 = F.mse_loss(1 - treatment_input[:, 0]) * u_logit['nextday_login'].squeeze() + treatment_input[:, 0] * tu_logit.squeeze(), y_true)
+        # loss1 = F.mse_loss((1 - treatment_input) * u_logit['nextday_login'].squeeze() + treatment_input * tu_logit.squeeze(), y_true)  # binary
+        loss1 = F.mse_loss((1 - treatment_input[:, 0]) * u_logit['nextday_login'].squeeze() + treatment_input[:, 0] * tu_logit.squeeze(), y_true)  # v0
         # loss1 = F.mse_loss(1 - treatment_input[:, 0]) * u_logit['nextday_login'].squeeze() + treatment_input[:, 0] * ((1 - treatment_input[:, 1]) * tu_logit.squeeze() + treatment_input[:, 1] * tu_logit_s.squeeze()), y_true)  # tu_logit_s directly models y_k
         # loss1 = F.mse_loss(1 - treatment_input[:, 0]) * u_logit['nextday_login'].squeeze() + treatment_input[:, 0] * (tu_logit.squeeze() + treatment_input[:, 1] * tu_logit_s.squeeze()), y_true)  # tu_logit_s models difference over 5AI
         
@@ -160,10 +159,12 @@ class MTMT(nn.Module):
         # loss3 = F.binary_cross_entropy_with_logits(tu_tau.squeeze(), 1 - treatment_input)  # binary
 
         # inverse probability metric loss to mitigate gap between treated and control y0
-        loss4 = F.mse_loss((u_logit['nextday_login'] * treatment_input).mean(), (u_logit['nextday_login'] * (1 - treatment_input)).mean())
+        # loss4 = F.mse_loss((u_logit['nextday_login'] * treatment_input).mean(), (u_logit['nextday_login'] * (1 - treatment_input)).mean())
+
+        # loss5 = 
         
         # return loss1 + loss2 * (loss1 / loss2).detach() + loss3 * (loss1 / loss3).detach()
-        return loss1 + loss4 * (loss1 / loss4).detach()
+        return loss1
     
     
     def self_attn(self, q, k, v):
@@ -197,7 +198,7 @@ def mtmt_res_emb_v0_4():
 
 def mtmt_res_emb_v0_4_0():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['nextday_login'],
-                 num_treats=1, t_dim=1, u_dim=128, tu_dim=256)
+                 num_treats=1, t_dim=2, u_dim=128, tu_dim=256)
 
 def mtmt_res_emb_v0_5():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Identity(), task_names=['nextday_login'],

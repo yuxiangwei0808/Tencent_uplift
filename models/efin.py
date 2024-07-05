@@ -125,7 +125,7 @@ class EFIN(nn.Module):
         uc = c_logit
         ut = c_logit_fix + u_tau
 
-        loss1 = F.mse_loss((1 - t_true) * uc + t_true * ut, y_true)
+        loss1 = F.mse_loss(uc + t_true * ut, y_true)
         loss2 = F.binary_cross_entropy_with_logits(t_logit, 1 - t_true)
         loss = loss1 + loss2
         # loss_estr = F.binary_cross_entropy_with_logits(ut, y_true * t_true)

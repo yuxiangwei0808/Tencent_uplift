@@ -7,8 +7,6 @@ import logging
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
-from sklift.metrics import uplift_auc_score, qini_auc_score
-from sklearn.metrics import roc_auc_score, average_precision_score
 import mlflow
 
 import torch
@@ -20,7 +18,8 @@ from torch.cuda.amp import GradScaler, autocast
 import torch.backends.cudnn as cudnn
 
 from data_loader import get_data, create_folds, get_data_criteo
-from metrics import uplift_at_k, weighted_average_uplift
+from metrics import uplift_at_k, weighted_average_uplift, metrics_mt
+from sklift.metrics import uplift_auc_score, qini_auc_score
 from utils import *
 
 
@@ -47,6 +46,8 @@ def valid(model, valid_dataloader, device, metric, epoch):
                 y0, y1, _, _ = model(feature_list)
                 uplift = y1 - y0
             elif 'mtmt' in args.model_name:
+                # y0, _, y1 = model(feature_list, is_treat)
+                # uplift = y1 - y0['nextday_login']
                 _, _, uplift = model(feature_list, is_treat)
             else:
                 raise NotImplementedError
@@ -67,14 +68,24 @@ def valid(model, valid_dataloader, device, metric, epoch):
     # pr_auc  = average_precision_score(true_labels, pred_prob)
     predictions = np.array(predictions)
 
-    u_at_k = uplift_at_k(true_labels, predictions, is_treatment, strategy='overall', k=0.3)
-    qini_coef = qini_auc_score(true_labels, predictions, is_treatment)
-    uplift_auc = uplift_auc_score(true_labels, predictions, is_treatment)
-    wau = weighted_average_uplift(true_labels, predictions, is_treatment, strategy='overall')
+    if len(target_treatment) > 1:
+        u_at_k = metrics_mt(uplift_at_k, true_labels, predictions, is_treatment, reduce='max')
+        qini_coef = metrics_mt(qini_auc_score, true_labels, predictions, is_treatment, reduce='max')
+        uplift_auc = metrics_mt(uplift_auc_score, true_labels, predictions, is_treatment, reduce='max')
+        wau = metrics_mt(weighted_average_uplift, true_labels, predictions, is_treatment, reduce='max')
+    else:
+        u_at_k = uplift_at_k(true_labels, predictions, is_treatment, strategy='overall', k=0.3)
+        qini_coef = qini_auc_score(true_labels, predictions, is_treatment)
+        uplift_auc = uplift_auc_score(true_labels, predictions, is_treatment)
+        wau = weighted_average_uplift(true_labels, predictions, is_treatment, strategy='overall')
 
-    valid_result = [u_at_k, qini_coef, uplift_auc, wau]
+    if isinstance(qini_coef, tuple):
+        valid_result = [{'QINI': qini, 'AUUC': up, 'WAU': w, 'u_at_k': uk} for qini, up, w, uk in zip(qini_coef, uplift_auc, wau, u_at_k)]
+    else:
+        valid_result = {'QINI': qini_coef, 'AUUC': uplift_auc, 'WAU': wau, 'u_at_k': u_at_k}
+    
     logger.info("Valid results: {} of epoch {}".format(valid_result, epoch))
-    return {'QINI': qini_coef, 'AUUC': uplift_auc, 'WAU': wau, 'u_at_k': u_at_k}, valid_result, true_labels, predictions, is_treatment
+    return valid_result, true_labels, predictions, is_treatment
 
 
 def setup_seed(seed):
@@ -87,11 +98,13 @@ def setup_seed(seed):
 
 def train(local_rank, train_files, test_files, fold_idx):    
     start_epoch = 0
-    best_valid_metrics = {'QINI': -10., 'AUUC': -10., 'WAU': -10., 'u_at_k': -10.}
+    best_valid_metrics = None
     result_early_stop = 0
     batch_size = 3840 * 4
     lamb = 1e-3
     learning_rate = 0.001
+    metric_names = ['QINI', 'u_at_k']
+    treat_names = ['5ai', '9ai']
     if torch.cuda.is_available():
         device = f'cuda:{args.local_rank}'
     else:
@@ -125,8 +138,8 @@ def train(local_rank, train_files, test_files, fold_idx):
 
     logger.info(f'{args.model_name}: Rank {local_rank} Start Training') 
     for epoch in range(start_epoch, num_epoch):
-        train_dataloader, valid_dataloader = get_data(train_files, test_files, target_treatment=None, target_task=None, batch_size=batch_size, dist=dist.is_initialized())
-        # train_dataloader, valid_dataloader = get_data_criteo(batch_size, fold_idx) 
+        train_dataloader, valid_dataloader = get_data(train_files, test_files, feature_group=None, batch_size=batch_size, dist=dist.is_initialized(), target_treatment=target_treatment)
+        # train_dataloader, valid_dataloader = get_data_criteo(batch_size, fold_idx)
         tr_loss = 0
         tr_steps = 0
         logger.info("Training Epoch: {}/{}".format(epoch + 1, int(num_epoch)))
@@ -167,23 +180,28 @@ def train(local_rank, train_files, test_files, fold_idx):
         logger.info("Epoch loss: {}, Avg loss: {}".format(tr_loss, tr_loss / tr_steps))
         
         model.eval()
-        valid_metrics, _, true_labels, predictions, treatment = valid(model, valid_dataloader, device, metric, epoch)
+        valid_metrics, true_labels, predictions, treatment = valid(model, valid_dataloader, device, metric, epoch)
         
         if args.enable_mlflow:
             for k, v in valid_metrics.items():
                 mlflow.log_metric(k + f'_{fold_idx}', v, epoch)
             mlflow.log_metric(f'train_loss_{fold_idx}', tr_loss / tr_steps, epoch)
 
-        is_early_stop = True
-        metric_names = ['QINI', 'u_at_k']
-        for metric_name in metric_names:
-            if valid_metrics[metric_name] > best_valid_metrics[metric_name]:
-                is_early_stop = False
-                save_model(model, optimizer, scaler, ckpt_path, epoch, tr_loss / tr_steps, metric_name, valid_metrics)
-                save_predictions(true_labels, predictions, treatment, valid_metrics, metric_name, pred_path)
-                best_valid_metrics[metric_name] = valid_metrics[metric_name]
-                result_early_stop = 0
-        
+
+        if isinstance(valid_metrics, list):
+            # each treatment has a metric dict
+            if best_valid_metrics is None:
+                best_valid_metrics = [{'QINI': -10, 'AUUC': -10, 'WAU': -10, 'u_at_k': -10} for _ in range(len(valid_metrics))]
+            
+            for i in range(len(valid_metrics)):
+                best_valid_metrics[i], is_early_stop, result_early_stop = save_best(valid_metrics[i], best_valid_metrics, metric_names,
+                                                                         model, optimizer, scaler, ckpt_path + f'{treat_names[i]}_', epoch, tr_loss, tr_steps,
+                                                                         true_labels, predictions, treatment, pred_path)   
+        else:
+            best_valid_metrics, is_early_stop, result_early_stop = save_best(valid_metrics, best_valid_metrics, metric_names,
+                                                                            model, optimizer, scaler, ckpt_path, epoch, tr_loss, tr_steps,
+                                                                            true_labels, predictions, treatment, pred_path)
+            
         if is_early_stop:
             result_early_stop += 1
 
@@ -208,10 +226,11 @@ if __name__ == "__main__":
     parser.add_argument('--resume', action='store_true', default=False, help='resume training from checkpoint')
     parser.add_argument('--ckpt_path', type=str)
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
-    parser.add_argument('--model_name', type=str, default='efin')
+    parser.add_argument('--model_name', type=str, default='mtmt')
     parser.add_argument('--enable_mlflow', action='store_true', default=False)
     parser.add_argument('--enable_amp', action='store_true', default=False)
     parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow'], help='all data or a subset of data')
+    parser.add_argument('--multi_treat', action='store_true', default=False, help='test multi_treatment')
     parser.add_argument('--note', type=str, help='additional notes')
     args = parser.parse_args()
 
@@ -228,6 +247,9 @@ if __name__ == "__main__":
         mlflow.set_tag('model_name', args.model_name)
         mlflow.log_params(vars(args))
         mlflow.log_artifacts('./models', artifact_path='python_files')
+        mlflow.log_artifact('./main.py', artifact_path='python_files')
+        mlflow.log_artifact('./utils.py', artifact_path='python_files')
+        mlflow.log_artifact('./data_loader.py', artifact_path='python_files')
 
     local_rank = args.local_rank
     world_size = args.world_size
@@ -256,12 +278,13 @@ if __name__ == "__main__":
         folds = create_folds(file_paths, n_folds=5)
         
     ave_best_valid_metrics = {'QINI': 0., 'AUUC': 0., 'WAU': 0., 'u_at_k': 0.}
+    target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround']
     
     fold_enumerator = enumerate(folds)
     fold_run = 0
 
     for fold_idx, (train_files, test_files) in fold_enumerator:
-        if args.fold_id is not None and fold_idx not in args.fold_id:
+        if args.fold_ids is not None and fold_idx not in args.fold_ids:
             continue
         logger.info("Fold {} start".format(fold_idx))        
         

@@ -66,7 +66,7 @@ def analysis_and_plot_uplift_qini_curves(targets, predictions, treats):
     
     plt.figure()
     sns.displot(predictions, bins=100, kde=True)
-    # plt.xlim(-0.1, 0.3)
+    plt.xlim(-0.1, 0.5)
     plt.grid(True)
     plt.savefig(f'{source_dir}/u_trend.png', bbox_inches='tight') 
     
@@ -160,7 +160,7 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     plt.savefig(f'{source_dir}/uplift_by_percentile_login.png')
 
 
-metric = 'u_at_k'
+metric = 'QINI'
 model_name = 'mtmt_res_disc_mlp__emb_v0'
 source = f'predictions/full/zscore/{model_name}/test/'
 
@@ -168,25 +168,28 @@ source_dir = os.path.join(model_name, metric)
 if not os.path.isdir(source_dir):
     os.makedirs(source_dir)
 
-targets, preds, treats, add_feats = [], [], [], []
+targets, preds, treats = [], [], []
 
 u_at_k = qini = auuc = 0
 
 for i in range(5):
     predictions = np.load(source + f'{model_name}_{i}_{metric}.npz')
     target, pred, treat = predictions['target'], predictions['pred'], predictions['treat']
-    add_feat = np.load(source + 'add_features.npz')['feature'][:, 1]
     targets.append(target)
     preds.append(pred)
     treats.append(treat)
-    add_feats.append(add_feat)
     u_at_k += predictions['u_at_k']
     qini += predictions['QINI']
     auuc += predictions['AUUC']
 
 print('qini: {}, auuc: {}, u at 0.3: {}'.format(qini / 5, auuc / 5, u_at_k / 5))
 
-targets, preds, treats, add_feats = np.concatenate(targets, 0), np.concatenate(preds, 0), np.concatenate(treats, 0), np.concatenate(add_feats, 0)
+targets, preds, treats = np.concatenate(targets, 0), np.concatenate(preds, 0), np.concatenate(treats, 0)
 
 analysis_and_plot_uplift_qini_curves(targets, preds, treats)
+
+add_feat = np.load(source + 'add_features.npz')['feature'][:, 1]
+add_feats = [add_feat for _ in range(5)]
+add_feats = np.concatenate(add_feats, 0)
+
 analysis_by_logindays(targets, preds, treats, add_feats)
