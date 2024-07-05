@@ -52,7 +52,7 @@ def get_model(name, model_kwargs=None):
 def save_best(valid_metrics, best_valid_metrics, metric_names,
              model, optimizer, scaler, ckpt_path, epoch, tr_loss, tr_steps,
              true_labels, predictions, treatment, pred_path):
-    is_early_stop = False
+    is_early_stop = True
     for metric_name in metric_names:  
         if valid_metrics[metric_name] > best_valid_metrics[metric_name]:
             is_early_stop = False
