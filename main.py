@@ -198,6 +198,8 @@ def train(local_rank, train_files, test_files, fold_idx):
                                                                          model, optimizer, scaler, ckpt_path + f'{treat_names[i]}_', epoch, tr_loss, tr_steps,
                                                                          true_labels, predictions, treatment, pred_path)   
         else:
+            if best_valid_metrics is None:
+                best_valid_metrics = {'QINI': -10, 'AUUC': -10, 'WAU': -10, 'u_at_k': -10}
             best_valid_metrics, is_early_stop, result_early_stop = save_best(valid_metrics, best_valid_metrics, metric_names,
                                                                             model, optimizer, scaler, ckpt_path, epoch, tr_loss, tr_steps,
                                                                             true_labels, predictions, treatment, pred_path)
