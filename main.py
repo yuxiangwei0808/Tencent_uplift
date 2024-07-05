@@ -24,7 +24,7 @@ from utils import *
 
 
 @torch.no_grad()
-def valid(model, valid_dataloader, device, metric, epoch):
+def valid(model, valid_dataloader, device, epoch, reduction='mean'):
     logger.info('Start Verifying')
     model.eval()
     predictions = []
@@ -69,10 +69,10 @@ def valid(model, valid_dataloader, device, metric, epoch):
     predictions = np.array(predictions)
 
     if len(target_treatment) > 1:
-        u_at_k = metrics_mt(uplift_at_k, true_labels, predictions, is_treatment, reduce='max')
-        qini_coef = metrics_mt(qini_auc_score, true_labels, predictions, is_treatment, reduce='max')
-        uplift_auc = metrics_mt(uplift_auc_score, true_labels, predictions, is_treatment, reduce='max')
-        wau = metrics_mt(weighted_average_uplift, true_labels, predictions, is_treatment, reduce='max')
+        u_at_k = metrics_mt(uplift_at_k, true_labels, predictions, is_treatment, reduce=reduction)
+        qini_coef = metrics_mt(qini_auc_score, true_labels, predictions, is_treatment, reduce=reduction)
+        uplift_auc = metrics_mt(uplift_auc_score, true_labels, predictions, is_treatment, reduce=reduction)
+        wau = metrics_mt(weighted_average_uplift, true_labels, predictions, is_treatment, reduce=reduction)
     else:
         u_at_k = uplift_at_k(true_labels, predictions, is_treatment, strategy='overall', k=0.3)
         qini_coef = qini_auc_score(true_labels, predictions, is_treatment)
@@ -134,7 +134,7 @@ def train(local_rank, train_files, test_files, fold_idx):
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch'] + 1 
-        best_valid_metrics = checkpoint[metric]
+        best_valid_metrics = checkpoint['']
 
     logger.info(f'{args.model_name}: Rank {local_rank} Start Training') 
     for epoch in range(start_epoch, num_epoch):
@@ -180,7 +180,7 @@ def train(local_rank, train_files, test_files, fold_idx):
         logger.info("Epoch loss: {}, Avg loss: {}".format(tr_loss, tr_loss / tr_steps))
         
         model.eval()
-        valid_metrics, true_labels, predictions, treatment = valid(model, valid_dataloader, device, metric, epoch)
+        valid_metrics, true_labels, predictions, treatment = valid(model, valid_dataloader, device, epoch)
         
         if args.enable_mlflow:
             for k, v in valid_metrics.items():
@@ -215,7 +215,6 @@ def train(local_rank, train_files, test_files, fold_idx):
 if __name__ == "__main__":
     seed = 114514
     num_epoch = 50
-    metric = 'QINI'
     cudnn.benchmark = True
     
     parser = argparse.ArgumentParser()
