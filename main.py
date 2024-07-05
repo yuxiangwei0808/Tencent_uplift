@@ -24,7 +24,7 @@ from utils import *
 
 
 @torch.no_grad()
-def valid(model, valid_dataloader, device, epoch, reduction='mean'):
+def valid(model, valid_dataloader, device, epoch, reduction):
     logger.info('Start Verifying')
     model.eval()
     predictions = []
@@ -180,7 +180,7 @@ def train(local_rank, train_files, test_files, fold_idx):
         logger.info("Epoch loss: {}, Avg loss: {}".format(tr_loss, tr_loss / tr_steps))
         
         model.eval()
-        valid_metrics, true_labels, predictions, treatment = valid(model, valid_dataloader, device, epoch)
+        valid_metrics, true_labels, predictions, treatment = valid(model, valid_dataloader, device, epoch, reduction)
         
         if args.enable_mlflow:
             for k, v in valid_metrics.items():
@@ -188,21 +188,22 @@ def train(local_rank, train_files, test_files, fold_idx):
             mlflow.log_metric(f'train_loss_{fold_idx}', tr_loss / tr_steps, epoch)
 
 
-        if isinstance(valid_metrics, list):
-            # each treatment has a metric dict
-            if best_valid_metrics is None:
+        if best_valid_metrics is None:
+            if isinstance(valid_metrics, list):
                 best_valid_metrics = [{'QINI': -10, 'AUUC': -10, 'WAU': -10, 'u_at_k': -10} for _ in range(len(valid_metrics))]
-            
+            else:
+                best_valid_metrics = {'QINI': -10, 'AUUC': -10, 'WAU': -10, 'u_at_k': -10}
+
+        if isinstance(valid_metrics, list):
+            # each treatment has a metric dict           
             for i in range(len(valid_metrics)):
                 best_valid_metrics[i], is_early_stop, result_early_stop = save_best(valid_metrics[i], best_valid_metrics, metric_names,
                                                                          model, optimizer, scaler, ckpt_path + f'{treat_names[i]}_', epoch, tr_loss, tr_steps,
-                                                                         true_labels, predictions, treatment, pred_path)   
+                                                                         true_labels, predictions, treatment, pred_path, result_early_stop)   
         else:
-            if best_valid_metrics is None:
-                best_valid_metrics = {'QINI': -10, 'AUUC': -10, 'WAU': -10, 'u_at_k': -10}
             best_valid_metrics, is_early_stop, result_early_stop = save_best(valid_metrics, best_valid_metrics, metric_names,
                                                                             model, optimizer, scaler, ckpt_path, epoch, tr_loss, tr_steps,
-                                                                            true_labels, predictions, treatment, pred_path)
+                                                                            true_labels, predictions, treatment, pred_path, result_early_stop)
             
         if is_early_stop:
             result_early_stop += 1
@@ -278,8 +279,9 @@ if __name__ == "__main__":
     else:
         folds = create_folds(file_paths, n_folds=5)
         
-    ave_best_valid_metrics = {'QINI': 0., 'AUUC': 0., 'WAU': 0., 'u_at_k': 0.}
+    ave_best_valid_metrics = None
     target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround']
+    reduction = 'mean'
     
     fold_enumerator = enumerate(folds)
     fold_run = 0
@@ -296,10 +298,24 @@ if __name__ == "__main__":
         if args.enable_mlflow:
             mlflow.log_metrics({'best_' + k: v for k, v in best_valid_metrics.items()}, step=fold_idx)
         
-        ave_best_valid_metrics = {k: ave_best_valid_metrics[k] + best_valid_metrics[k] for k in best_valid_metrics}
+        if ave_best_valid_metrics is None:
+            if isinstance(best_valid_metrics, list):
+                ave_best_valid_metrics = [{'QINI': 0., 'AUUC': 0., 'WAU': 0., 'u_at_k': 0.} for _ in range(len(best_valid_metrics))]
+            else:
+                ave_best_valid_metrics = {'QINI': 0., 'AUUC': 0., 'WAU': 0., 'u_at_k': 0.}
+        
+        if isinstance(best_valid_metrics, list):
+            for i in range(len(best_valid_metrics)):
+                ave_best_valid_metrics[i] = {k: ave_best_valid_metrics[i][k] + best_valid_metrics[i][k] for k in best_valid_metrics[i]}
+        else:
+            ave_best_valid_metrics = {k: ave_best_valid_metrics[k] + best_valid_metrics[k] for k in best_valid_metrics}
         
         with open(f"predictions/{args.data_type}/{args.norm_type}/{args.model_name}/job_status.txt", 'a') as f:
             f.write(f'\nfinished fold {fold_idx}')
     
-    ave_best_valid_metrics = {k: v / fold_run for k, v in ave_best_valid_metrics.items()}
+    if isinstance(best_valid_metrics, list):
+        for i in range(len(best_valid_metrics)):
+                ave_best_valid_metrics[i] = {k: v / fold_run for k, v in ave_best_valid_metrics[i].items()}
+    else:
+        ave_best_valid_metrics = {k: v / fold_run for k, v in ave_best_valid_metrics.items()}
     print(f'average best: {ave_best_valid_metrics}')
