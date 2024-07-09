@@ -39,6 +39,9 @@ def valid(model, valid_dataloader, device, epoch, reduction):
         is_treat = T.to(device)
         label_list = valid_label.to(device)
 
+        if len(target_task) > 1:
+            label_list = label_list[:, 1]  # use label_login_days_diff only
+
         with autocast():
             if 'efin' in args.model_name:
                 _, _, _, _, _, uplift = model(feature_list, is_treat)
@@ -46,16 +49,16 @@ def valid(model, valid_dataloader, device, epoch, reduction):
                 y0, y1, _, _ = model(feature_list)
                 uplift = y1 - y0
             elif 'mtmt' in args.model_name:
-                # y0, _, y1 = model(feature_list, is_treat)
+                # y0, _, y1, _ = model(feature_list, is_treat)
                 # uplift = y1 - y0['nextday_login']
-                _, _, uplift = model(feature_list, is_treat)
+                _, _, uplift, _ = model(feature_list, is_treat)
             else:
                 raise NotImplementedError
         uplift = uplift.squeeze()
 
-        predictions.extend(uplift.cpu().detach())
-        true_labels.extend(label_list.cpu().detach().numpy())
-        is_treatment.extend(is_treat.cpu().detach().numpy())
+        predictions.extend(uplift.squeeze().cpu().detach())
+        true_labels.extend(label_list.squeeze().cpu().detach().numpy())
+        is_treatment.extend(is_treat.squeeze().cpu().detach().numpy())
 
         del feature_list, is_treat, label_list, uplift
 
@@ -109,7 +112,7 @@ def train(local_rank, train_files, test_files, fold_idx):
         device = f'cuda:{args.local_rank}'
     else:
         device = 'cpu'
-    model, model_kwargs = get_model(name=args.model_name)
+    model, model_kwargs = get_model(name=args.model_name, task_name=target_task)
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], output_device=local_rank) if dist.is_initialized() else model
 
@@ -138,7 +141,7 @@ def train(local_rank, train_files, test_files, fold_idx):
 
     logger.info(f'{args.model_name}: Rank {local_rank} Start Training') 
     for epoch in range(start_epoch, num_epoch):
-        train_dataloader, valid_dataloader = get_data(train_files, test_files, feature_group=None, batch_size=batch_size, dist=dist.is_initialized(), target_treatment=target_treatment)
+        train_dataloader, valid_dataloader = get_data(train_files, test_files, feature_group=None, batch_size=batch_size, dist=dist.is_initialized(), target_treatment=target_treatment, target_task=target_task)
         # train_dataloader, valid_dataloader = get_data_criteo(batch_size, fold_idx)
         tr_loss = 0
         tr_steps = 0
@@ -159,11 +162,11 @@ def train(local_rank, train_files, test_files, fold_idx):
             model.train()
             optimizer.zero_grad()
 
-            if 'dragonnet' in args.model_name or not args.enable_amp:  # unsage bce for dragonnet, which does not allow autocast
+            if 'dragonnet' in args.model_name or not args.enable_amp:  # unsafe bce for dragonnet, which does not allow autocast
                 loss = model.calculate_loss(feature_list, is_treat, label_list)
             else:
                 with autocast():
-                    loss = model.calculate_loss(feature_list, is_treat, label_list)
+                    loss = model.calculate_loss(feature_list, is_treat, label_list, target_task)
 
             if args.enable_amp:
                 scaler.scale(loss).backward()
@@ -231,7 +234,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_name', type=str, default='mtmt')
     parser.add_argument('--enable_mlflow', action='store_true', default=False)
     parser.add_argument('--enable_amp', action='store_true', default=False)
-    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow'], help='all data or a subset of data')
+    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'warmtype'], help='all data or a subset of data')
     parser.add_argument('--multi_treat', action='store_true', default=False, help='test multi_treatment')
     parser.add_argument('--note', type=str, help='additional notes')
     args = parser.parse_args()
@@ -266,8 +269,8 @@ if __name__ == "__main__":
         file_paths = [f'data/train_test_data/traindata_lowactive_240119_240411_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)]
     elif args.data_type == 'midactive':
         file_paths = [f'data/train_test_data/traindata_midactive_240119_240411_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)]
-    elif args.data_type == 'combine0':
-        ...
+    elif args.data_type == 'warmtype':
+        file_paths = [f'data/train_test_data/traindata_warmtype_240119_240411_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)]
     else:
         raise NotImplementedError
     
@@ -280,8 +283,9 @@ if __name__ == "__main__":
         folds = create_folds(file_paths, n_folds=5)
         
     ave_best_valid_metrics = None
-    target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround']
-    reduction = 'mean'
+    target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround'] if args.data_type == 'warmtype' else ['treatment_next_iswarm']
+    target_task = ['label_nextday_login']
+    reduction = 'max'
     
     fold_enumerator = enumerate(folds)
     fold_run = 0

@@ -31,6 +31,10 @@ def valid(model, valid_dataloader, device, num_org_feat, reduction=None):
             add_features.extend(X[:, -num_org_feat:].numpy())
         is_treat = T.to(device)
         label_list = valid_label.to(device)
+
+        if len(target_task) > 1:
+            label_list = label_list[:, 1]  # use label_login_days_diff only
+
         if 'efin' in args.model_name:
             _, _, _, _, _, uplift = model(feature_list, is_treat)
         elif 'dragonnet' in args.model_name:
@@ -39,7 +43,7 @@ def valid(model, valid_dataloader, device, num_org_feat, reduction=None):
         elif 'mtmt' in args.model_name:
             # y0, _, y1 = model(feature_list, is_treat)
             # uplift = y1 - y0['nextday_login']
-            _, _, uplift = model(feature_list, is_treat)
+            _, _, uplift, _ = model(feature_list, is_treat)
         else:
             raise NotImplementedError
         uplift = uplift.squeeze()
@@ -98,9 +102,9 @@ def main(args):
 
     if isinstance(valid_metrics, list):
         for i in range(len(valid_metrics)):
-            save_predictions(true_labels, predictions, treatment, valid_metrics[i], '', saving_path + f'{treat_names[i]}_')
+            save_predictions(true_labels, predictions, treatment, valid_metrics[i], '', saving_path + f'_{treat_names[i]}')
     else:
-        save_predictions(true_labels, predictions, treatment, valid_metrics[i], '', saving_path)
+        save_predictions(true_labels, predictions, treatment, valid_metrics, '', saving_path)
     
     return add_features
     
@@ -127,9 +131,12 @@ if __name__ == '__main__':
 
     labels = [x.strip('\n') for x in labels]
     org_feat_idx = [i for i in range(len(labels)) if 'origin' in labels[i]]
-    target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround']
+    target_treatment = ['treatment_next_iswarm']
+    # 'treatment_next_is_9aiwarmround'
+    # target_task = ['label_nextday_login']
+    target_task = ['label_nextday_login', 'label_login_days_diff']
     
-    train_dataloader, valid_dataloader = get_data([*file_path], [*file_path], feature_group=None, batch_size=batch_size, addition_feat=org_feat_idx, target_treatment=target_treatment)
+    train_dataloader, valid_dataloader = get_data([*file_path], [*file_path], feature_group=None, batch_size=batch_size, addition_feat=org_feat_idx, target_treatment=target_treatment, target_task=target_task)
     
     for metric in ['QINI', 'u_at_k']:
         ckpt_paths = os.listdir(f'checkpoints/{args.data_type}/{args.norm_type}/{args.model_name}')

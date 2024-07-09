@@ -115,8 +115,7 @@ def collate_fn(batch, feature_index, treatment_index, task_index, group_discrete
     # Convert to tensors
     features_tensor = torch.as_tensor(features, dtype=torch.float32)
     treatments_tensor = torch.as_tensor(treatments, dtype=torch.float32).squeeze()
-    tasks_tensor = torch.as_tensor(tasks, dtype=torch.float32).squeeze()
-    
+    tasks_tensor = torch.as_tensor(tasks, dtype=torch.float32)
     if group_discrete:
         if pad:
             grouped_disc_feature = [batch[:, indices] for indices in feature_groups.groups.values()]
@@ -149,14 +148,13 @@ class feature_groups:
     indices = list(range(685, 770))
     # indices += list(range(121, 184))
 
-def get_data(train_files, test_files, target_treatment=None, target_task=None, batch_size=3840, dist=False, feature_group=None, addition_feat=None):
+def get_data(train_files, test_files, target_treatment, target_task, batch_size=3840, dist=False, feature_group=None, addition_feat=None):
     with open('data/train_test_data/OUT_COLUMN_new', 'r') as f:
         labels = f.readlines()
     labels = [x.strip('\n') for x in labels]
-        
-    treatment_index = [idx for idx, elem in enumerate(labels) if elem == 'treatment_next_iswarm']
-    # treatment_next_is_9aiwarmround
-    task_index = [idx for idx, elem in enumerate(labels) if elem == 'label_nextday_login']
+    
+    treatment_index = [idx for idx, elem in enumerate(labels) if elem in target_treatment]
+    task_index = [idx for idx, elem in enumerate(labels) if elem in target_task]
     
     feature_index = [idx for idx, elem in enumerate(labels) if elem[:3] == 'fea']
     if feature_group != None:

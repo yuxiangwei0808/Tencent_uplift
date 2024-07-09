@@ -4,7 +4,7 @@ import os
 
 from models.efin import EFIN
 from models.dragonnet import DragonNet
-from models.mtmt import *
+from models.model_hub import *
 
 
 def check_and_make_dir(path):
@@ -32,7 +32,7 @@ def save_predictions(target, pred, treat, valid_metrics, metric_name, path, feat
     np.savez_compressed(path + metric_name, target=target, pred=pred, treat=treat, feature=feature, **valid_metrics)
 
 
-def get_model(name, model_kwargs=None):
+def get_model(name, model_kwargs=None, task_name=None):
     if 'efin' in name:
         if model_kwargs is None:
             model_kwargs = {'input_dim': 629, 'hc_dim': 96, 'hu_dim': 96, 'is_self': False, 'act_type': 'elu'}

@@ -66,7 +66,7 @@ def analysis_and_plot_uplift_qini_curves(targets, predictions, treats):
     
     plt.figure()
     sns.displot(predictions, bins=100, kde=True)
-    plt.xlim(-0.1, 0.5)
+    # plt.xlim(-0.1, 0.5)
     plt.grid(True)
     plt.savefig(f'{source_dir}/u_trend.png', bbox_inches='tight') 
     
@@ -160,21 +160,37 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     plt.savefig(f'{source_dir}/uplift_by_percentile_login.png')
 
 
-metric = 'QINI'
-model_name = 'mtmt_res_disc_mlp__emb_v0'
+metric = 'u_at_k'
+treat_name = ''
+model_name = 'mtmt_res_emb_v0_4_0_EFIN_tauControl'
 source = f'predictions/full/zscore/{model_name}/test/'
 
-source_dir = os.path.join(model_name, metric)
+print(model_name, metric, treat_name)
+
+source_dir = os.path.join('results', model_name, metric, treat_name)
 if not os.path.isdir(source_dir):
     os.makedirs(source_dir)
 
-targets, preds, treats = [], [], []
+targets, preds, treats, add_feats = [], [], [], []
 
 u_at_k = qini = auuc = 0
+ind_ai = None
 
+add_feat = np.load(source + 'add_features.npz')['feature'][:, 1]
 for i in range(5):
-    predictions = np.load(source + f'{model_name}_{i}_{metric}.npz')
+    path = source + f'{model_name}_{i}_{metric}_{treat_name}.npz' if treat_name != '' else source + f'{model_name}_{i}_{metric}.npz'
+    predictions = np.load(path)
     target, pred, treat = predictions['target'], predictions['pred'], predictions['treat']
+    
+    if treat_name != '':
+        ind_control = treat[:, 0] == 0
+        if '5AI' in treat_name:
+            ind_ai = (treat[:, 0] == 1) & (treat[:, 1] == 0)
+            target, pred, treat = target[ind_control | ind_ai], pred[ind_control | ind_ai], treat[:, 0][ind_control | ind_ai]
+        else:
+            ind_ai = (treat[:, 0] == 1) & (treat[:, 1] == 1)
+            target, pred, treat = target[ind_control | ind_ai], pred[ind_control | ind_ai], treat[:, 0][ind_control | ind_ai]
+
     targets.append(target)
     preds.append(pred)
     treats.append(treat)
@@ -182,14 +198,15 @@ for i in range(5):
     qini += predictions['QINI']
     auuc += predictions['AUUC']
 
+    if ind_ai is not None:
+        add_feats.append(add_feat[ind_control | ind_ai])
+    else:
+        add_feats.append(add_feat)
+
 print('qini: {}, auuc: {}, u at 0.3: {}'.format(qini / 5, auuc / 5, u_at_k / 5))
 
-targets, preds, treats = np.concatenate(targets, 0), np.concatenate(preds, 0), np.concatenate(treats, 0)
+targets, preds, treats, add_feats = np.concatenate(targets, 0), np.concatenate(preds, 0), np.concatenate(treats, 0), np.concatenate(add_feats, 0)
 
 analysis_and_plot_uplift_qini_curves(targets, preds, treats)
-
-add_feat = np.load(source + 'add_features.npz')['feature'][:, 1]
-add_feats = [add_feat for _ in range(5)]
-add_feats = np.concatenate(add_feats, 0)
 
 analysis_by_logindays(targets, preds, treats, add_feats)
