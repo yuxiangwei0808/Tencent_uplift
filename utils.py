@@ -4,7 +4,7 @@ import os
 
 from models.efin import EFIN
 from models.dragonnet import DragonNet
-from models.mtmt import mtmt_res_emb_v0
+from models.model_hub import *
 
 
 def check_and_make_dir(path):
@@ -18,8 +18,8 @@ def save_model(model, optimizer, scaler, path, epoch, loss, metric_name, metrics
     metric_name = '' if metric_name is None else metric_name
     checkpoint = dict({
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scaler_state_dict': scaler.state_dict(),
+        # 'optimizer_state_dict': optimizer.state_dict(),
+        # 'scaler_state_dict': scaler.state_dict(),
         'epoch': epoch,
         'loss': loss,
         'metric': metrics})
@@ -32,10 +32,10 @@ def save_predictions(target, pred, treat, valid_metrics, metric_name, path, feat
     np.savez_compressed(path + metric_name, target=target, pred=pred, treat=treat, feature=feature, **valid_metrics)
 
 
-def get_model(name, model_kwargs=None):
+def get_model(name, model_kwargs=None, task_name=None):
     if 'efin' in name:
         if model_kwargs is None:
-            model_kwargs = {'input_dim': 622, 'hc_dim': 96, 'hu_dim': 96, 'is_self': False, 'act_type': 'elu'}
+            model_kwargs = {'input_dim': 629, 'hc_dim': 96, 'hu_dim': 96, 'is_self': False, 'act_type': 'elu'}
         return EFIN(**model_kwargs), model_kwargs
     elif 'dragonnet' in name:
         if model_kwargs is None:
@@ -43,7 +43,22 @@ def get_model(name, model_kwargs=None):
         return DragonNet(**model_kwargs), model_kwargs
     elif 'mtmt' in name:
         if model_kwargs is None:
-            model_kwargs = {'name': 'res_emb_v0', 't_dim': 1, 'u_dim': 128, 'tu_dim':256}
-        return mtmt_res_emb_v0(), model_kwargs
+            model_kwargs = {'name': 'mtmt_res_emb_v0_4_0', 't_dim': 1, 'u_dim': 128, 'tu_dim':256}
+        return mtmt_res_emb_v0_4_0(), model_kwargs
     else:
         raise NotImplementedError
+
+
+def save_best(valid_metrics, best_valid_metrics, metric_names,
+             model, optimizer, scaler, ckpt_path, epoch, tr_loss, tr_steps,
+             true_labels, predictions, treatment, pred_path, result_early_stop):
+    is_early_stop = True
+    for metric_name in metric_names:  
+        if valid_metrics[metric_name] > best_valid_metrics[metric_name]:
+            is_early_stop = False
+            save_model(model, optimizer, scaler, ckpt_path, epoch, tr_loss / tr_steps, metric_name, valid_metrics)
+            save_predictions(true_labels, predictions, treatment, valid_metrics, metric_name, pred_path)
+            best_valid_metrics[metric_name] = valid_metrics[metric_name]
+            result_early_stop = 0
+
+    return best_valid_metrics, is_early_stop, result_early_stop

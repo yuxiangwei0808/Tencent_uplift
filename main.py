@@ -7,8 +7,6 @@ import logging
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
-from sklift.metrics import uplift_auc_score, qini_auc_score
-from sklearn.metrics import roc_auc_score, average_precision_score
 import mlflow
 
 import torch
@@ -19,13 +17,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.cuda.amp import GradScaler, autocast
 import torch.backends.cudnn as cudnn
 
-from data_loader import get_data, create_folds
-from metrics import uplift_at_k, weighted_average_uplift
+from data_loader import get_data, create_folds, get_data_criteo
+from metrics import uplift_at_k, weighted_average_uplift, metrics_mt
+from sklift.metrics import uplift_auc_score, qini_auc_score
 from utils import *
 
 
 @torch.no_grad()
-def valid(model, valid_dataloader, device, metric, epoch):
+def valid(model, valid_dataloader, device, epoch, reduction):
     logger.info('Start Verifying')
     model.eval()
     predictions = []
@@ -39,6 +38,10 @@ def valid(model, valid_dataloader, device, metric, epoch):
             feature_list = X.to(device)
         is_treat = T.to(device)
         label_list = valid_label.to(device)
+
+        if len(target_task) > 1:
+            label_list = label_list[:, 1]  # use label_login_days_diff only
+
         with autocast():
             if 'efin' in args.model_name:
                 _, _, _, _, _, uplift = model(feature_list, is_treat)
@@ -46,15 +49,18 @@ def valid(model, valid_dataloader, device, metric, epoch):
                 y0, y1, _, _ = model(feature_list)
                 uplift = y1 - y0
             elif 'mtmt' in args.model_name:
-                _, _, uplift = model(feature_list, is_treat)
+                # y0, _, y1, _ = model(feature_list, is_treat)
+                # uplift = y1 - y0['nextday_login']
+                # _, _, uplift, _ = model(feature_list, is_treat)
+                ...
             else:
                 raise NotImplementedError
         uplift = uplift.squeeze()
 
-        predictions.extend(uplift.cpu().detach())
-        true_labels.extend(label_list.cpu().detach().numpy())
-        is_treatment.extend(is_treat.cpu().detach().numpy())
-        
+        predictions.extend(uplift.squeeze().cpu().detach())
+        true_labels.extend(label_list.squeeze().cpu().detach().numpy())
+        is_treatment.extend(is_treat.squeeze().cpu().detach().numpy())
+
         del feature_list, is_treat, label_list, uplift
 
     true_labels = np.array(true_labels)
@@ -66,24 +72,24 @@ def valid(model, valid_dataloader, device, metric, epoch):
     # pr_auc  = average_precision_score(true_labels, pred_prob)
     predictions = np.array(predictions)
 
-    u_at_k = uplift_at_k(true_labels, predictions, is_treatment, strategy='overall', k=0.3)
-    qini_coef = qini_auc_score(true_labels, predictions, is_treatment)
-    uplift_auc = uplift_auc_score(true_labels, predictions, is_treatment)
-    wau = weighted_average_uplift(true_labels, predictions, is_treatment, strategy='overall')
-
-    # valid_result = [u_at_k, qini_coef, uplift_auc, wau, roc_auc, pr_auc]
-    valid_result = [u_at_k, qini_coef, uplift_auc, wau]
-
-    if metric == "AUUC":
-        valid_metric = uplift_auc
-    elif metric == "QINI":
-        valid_metric = qini_coef
-    elif metric == 'WAU':
-        valid_metric = wau
+    if len(target_treatment) > 1:
+        u_at_k = metrics_mt(uplift_at_k, true_labels, predictions, is_treatment, reduce=reduction)
+        qini_coef = metrics_mt(qini_auc_score, true_labels, predictions, is_treatment, reduce=reduction)
+        uplift_auc = metrics_mt(uplift_auc_score, true_labels, predictions, is_treatment, reduce=reduction)
+        wau = metrics_mt(weighted_average_uplift, true_labels, predictions, is_treatment, reduce=reduction)
     else:
-        valid_metric = u_at_k
+        u_at_k = uplift_at_k(true_labels, predictions, is_treatment, strategy='overall', k=0.3)
+        qini_coef = qini_auc_score(true_labels, predictions, is_treatment)
+        uplift_auc = uplift_auc_score(true_labels, predictions, is_treatment)
+        wau = weighted_average_uplift(true_labels, predictions, is_treatment, strategy='overall')
+
+    if isinstance(qini_coef, tuple):
+        valid_result = [{'QINI': qini, 'AUUC': up, 'WAU': w, 'u_at_k': uk} for qini, up, w, uk in zip(qini_coef, uplift_auc, wau, u_at_k)]
+    else:
+        valid_result = {'QINI': qini_coef, 'AUUC': uplift_auc, 'WAU': wau, 'u_at_k': u_at_k}
+    
     logger.info("Valid results: {} of epoch {}".format(valid_result, epoch))
-    return {metric: valid_metric, 'AUUC': uplift_auc, 'WAU': wau, 'u_at_k': u_at_k}, valid_result, true_labels, predictions, is_treatment
+    return valid_result, true_labels, predictions, is_treatment
 
 
 def setup_seed(seed):
@@ -96,16 +102,18 @@ def setup_seed(seed):
 
 def train(local_rank, train_files, test_files, fold_idx):    
     start_epoch = 0
-    best_valid_metrics = {'QINI': 0., 'ROC-AUC': 0, 'PR-AUC': 0., 'AUUC': 0., 'WAU': 0., 'u_at_k': 0.}
+    best_valid_metrics = None
     result_early_stop = 0
     batch_size = 3840 * 4
     lamb = 1e-3
     learning_rate = 0.001
+    metric_names = ['QINI', 'u_at_k']
+    treat_names = ['5ai', '9ai']
     if torch.cuda.is_available():
         device = f'cuda:{args.local_rank}'
     else:
         device = 'cpu'
-    model, model_kwargs = get_model(name=args.model_name)
+    model, model_kwargs = get_model(name=args.model_name, task_name=target_task)
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], output_device=local_rank) if dist.is_initialized() else model
     
@@ -114,8 +122,8 @@ def train(local_rank, train_files, test_files, fold_idx):
     
     if args.enable_dist:
         torch.distributed.init_process_group(backend='nccl', init_method='env://', world_size=world_size, rank=local_rank)
-    torch.cuda.set_device(local_rank)
     device = torch.device(f'cuda:{local_rank}')
+    torch.cuda.set_device(device)
 
     setup_seed(seed)
 
@@ -128,19 +136,21 @@ def train(local_rank, train_files, test_files, fold_idx):
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch'] + 1 
-        best_valid_metrics = checkpoint[metric]
+        best_valid_metrics = checkpoint['']
 
-    logger.info(f'EFIN: Rank {local_rank} Start Training') 
+    logger.info(f'{args.model_name}: Rank {local_rank} Start Training') 
     for epoch in range(start_epoch, num_epoch):
-        train_dataloader, valid_dataloader = get_data(train_files, test_files, feature_group=1, batch_size=batch_size, dist=dist.is_initialized())
+        train_dataloader, valid_dataloader = get_data(train_files, test_files, feature_group=None, batch_size=batch_size, dist=dist.is_initialized(), target_treatment=target_treatment, target_task=target_task)
+        # train_dataloader, valid_dataloader = get_data_criteo(batch_size, fold_idx)
         tr_loss = 0
         tr_steps = 0
         logger.info("Training Epoch: {}/{}".format(epoch + 1, int(num_epoch)))
         if dist.is_initialized():
             train_dataloader.sampler.set_epoch(epoch)
+
         for step, (X, T, label) in enumerate(tqdm(train_dataloader)):
-            tr_steps += 1   
-            
+            tr_steps += 1
+
             if isinstance(X, list):
                 feature_list = [f.to(device) for f in X]
             else:
@@ -151,11 +161,11 @@ def train(local_rank, train_files, test_files, fold_idx):
             model.train()
             optimizer.zero_grad()
 
-            if 'dragonnet' in args.model_name or not args.enable_amp:  # unsage bce for dragonnet, which does not allow autocast
+            if 'dragonnet' in args.model_name or not args.enable_amp:  # unsafe bce for dragonnet, which does not allow autocast
                 loss = model.calculate_loss(feature_list, is_treat, label_list)
             else:
                 with autocast():
-                    loss = model.calculate_loss(feature_list, is_treat, label_list)
+                    loss = model.calculate_loss(feature_list, is_treat, label_list, target_task)
 
             if args.enable_amp:
                 scaler.scale(loss).backward()
@@ -172,23 +182,31 @@ def train(local_rank, train_files, test_files, fold_idx):
         logger.info("Epoch loss: {}, Avg loss: {}".format(tr_loss, tr_loss / tr_steps))
         
         model.eval()
-        valid_metrics, _, true_labels, predictions, treatment = valid(model, valid_dataloader, device, metric, epoch)
+        valid_metrics, true_labels, predictions, treatment = valid(model, valid_dataloader, device, epoch, reduction)
         
         if args.enable_mlflow:
             for k, v in valid_metrics.items():
                 mlflow.log_metric(k + f'_{fold_idx}', v, epoch)
             mlflow.log_metric(f'train_loss_{fold_idx}', tr_loss / tr_steps, epoch)
 
-        is_early_stop = True
-        metric_names = ['QINI', 'u_at_k']
-        for metric_name in metric_names:
-            if valid_metrics[metric_name] > best_valid_metrics[metric_name]:
-                is_early_stop = False
-                save_model(model, optimizer, scaler, ckpt_path, epoch, tr_loss / tr_steps, metric_name, valid_metrics)
-                save_predictions(true_labels, predictions, treatment, valid_metrics, metric_name, pred_path)
-                best_valid_metrics[metric_name] = valid_metrics[metric_name]
-                result_early_stop = 0
-        
+
+        if best_valid_metrics is None:
+            if isinstance(valid_metrics, list):
+                best_valid_metrics = [{'QINI': -10, 'AUUC': -10, 'WAU': -10, 'u_at_k': -10} for _ in range(len(valid_metrics))]
+            else:
+                best_valid_metrics = {'QINI': -10, 'AUUC': -10, 'WAU': -10, 'u_at_k': -10}
+
+        if isinstance(valid_metrics, list):
+            # each treatment has a metric dict           
+            for i in range(len(valid_metrics)):
+                best_valid_metrics[i], is_early_stop, result_early_stop = save_best(valid_metrics[i], best_valid_metrics, metric_names,
+                                                                         model, optimizer, scaler, ckpt_path + f'{treat_names[i]}_', epoch, tr_loss, tr_steps,
+                                                                         true_labels, predictions, treatment, pred_path, result_early_stop)   
+        else:
+            best_valid_metrics, is_early_stop, result_early_stop = save_best(valid_metrics, best_valid_metrics, metric_names,
+                                                                            model, optimizer, scaler, ckpt_path, epoch, tr_loss, tr_steps,
+                                                                            true_labels, predictions, treatment, pred_path, result_early_stop)
+            
         if is_early_stop:
             result_early_stop += 1
 
@@ -202,21 +220,22 @@ def train(local_rank, train_files, test_files, fold_idx):
 if __name__ == "__main__":
     seed = 114514
     num_epoch = 50
-    metric = 'QINI'
     cudnn.benchmark = True
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--enable_dist', action='store_true', default=False)
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--world_size', type=int, default=1)
-    parser.add_argument('--fold_ids', nargs='+', type=int, help='train the given folds')
+    parser.add_argument('--fold_ids', type=int, nargs='+', help='train the given folds')
     parser.add_argument('--resume', action='store_true', default=False, help='resume training from checkpoint')
     parser.add_argument('--ckpt_path', type=str)
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
-    parser.add_argument('--model_name', type=str, default='efin')
+    parser.add_argument('--model_name', type=str, default='mtmt')
     parser.add_argument('--enable_mlflow', action='store_true', default=False)
     parser.add_argument('--enable_amp', action='store_true', default=False)
-    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'combine0'], help='all data or a subset of data')
+    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'warmtype'], help='all data or a subset of data')
+    parser.add_argument('--multi_treat', action='store_true', default=False, help='test multi_treatment')
+    parser.add_argument('--note', type=str, help='additional notes')
     args = parser.parse_args()
 
     setup_seed(seed)
@@ -232,10 +251,12 @@ if __name__ == "__main__":
         mlflow.set_tag('model_name', args.model_name)
         mlflow.log_params(vars(args))
         mlflow.log_artifacts('./models', artifact_path='python_files')
+        mlflow.log_artifact('./main.py', artifact_path='python_files')
+        mlflow.log_artifact('./utils.py', artifact_path='python_files')
+        mlflow.log_artifact('./data_loader.py', artifact_path='python_files')
 
     local_rank = args.local_rank
     world_size = args.world_size
-    
     
     if args.data_type == 'full':
         file_paths = [f'data/train_test_data/traindata_240119_240411_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)]
@@ -247,8 +268,8 @@ if __name__ == "__main__":
         file_paths = [f'data/train_test_data/traindata_lowactive_240119_240411_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)]
     elif args.data_type == 'midactive':
         file_paths = [f'data/train_test_data/traindata_midactive_240119_240411_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)]
-    elif args.data_type == 'combine0':
-        ...
+    elif args.data_type == 'warmtype':
+        file_paths = [f'data/train_test_data/traindata_warmtype_240119_240411_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)]
     else:
         raise NotImplementedError
     
@@ -260,7 +281,10 @@ if __name__ == "__main__":
     else:
         folds = create_folds(file_paths, n_folds=5)
         
-    ave_best_valid_metrics = {'QINI': 0., 'ROC-AUC': 0, 'PR-AUC': 0., 'AUUC': 0., 'WAU': 0., 'u_at_k': 0.}
+    ave_best_valid_metrics = None
+    target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround'] if args.data_type == 'warmtype' else ['treatment_next_iswarm']
+    target_task = ['label_nextday_login']
+    reduction = 'max'
     
     fold_enumerator = enumerate(folds)
     fold_run = 0
@@ -277,7 +301,24 @@ if __name__ == "__main__":
         if args.enable_mlflow:
             mlflow.log_metrics({'best_' + k: v for k, v in best_valid_metrics.items()}, step=fold_idx)
         
-        ave_best_valid_metrics = {k: ave_best_valid_metrics[k] + best_valid_metrics[k] for k in best_valid_metrics}
+        if ave_best_valid_metrics is None:
+            if isinstance(best_valid_metrics, list):
+                ave_best_valid_metrics = [{'QINI': 0., 'AUUC': 0., 'WAU': 0., 'u_at_k': 0.} for _ in range(len(best_valid_metrics))]
+            else:
+                ave_best_valid_metrics = {'QINI': 0., 'AUUC': 0., 'WAU': 0., 'u_at_k': 0.}
+        
+        if isinstance(best_valid_metrics, list):
+            for i in range(len(best_valid_metrics)):
+                ave_best_valid_metrics[i] = {k: ave_best_valid_metrics[i][k] + best_valid_metrics[i][k] for k in best_valid_metrics[i]}
+        else:
+            ave_best_valid_metrics = {k: ave_best_valid_metrics[k] + best_valid_metrics[k] for k in best_valid_metrics}
+        
+        with open(f"predictions/{args.data_type}/{args.norm_type}/{args.model_name}/job_status.txt", 'a') as f:
+            f.write(f'\nfinished fold {fold_idx}')
     
-    ave_best_valid_metrics = {k: v / fold_run for k, v in ave_best_valid_metrics.items()}
+    if isinstance(best_valid_metrics, list):
+        for i in range(len(best_valid_metrics)):
+                ave_best_valid_metrics[i] = {k: v / fold_run for k, v in ave_best_valid_metrics[i].items()}
+    else:
+        ave_best_valid_metrics = {k: v / fold_run for k, v in ave_best_valid_metrics.items()}
     print(f'average best: {ave_best_valid_metrics}')

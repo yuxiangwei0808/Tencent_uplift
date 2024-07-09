@@ -46,6 +46,18 @@ def downsample_untreated_login(df, col1=537, col2=555):
     result_df = pd.concat(downsampled_dfs)
     return result_df
 
+def downsample_to_least(df, target_columns):
+    combination_counts = df.groupby(target_columns).size().reset_index(name='count')
+    
+    min_count = combination_counts['count'].min()
+    downsampled_data = []
+
+    for _, group in df.groupby(target_columns):
+        downsampled_group = group.sample(n=min(min_count, len(group)), random_state=42)
+        downsampled_data.append(downsampled_group)
+    downsampled_df = pd.concat(downsampled_data).reset_index(drop=True)
+
+    return downsampled_df
 
 def process_bin(bin, output_file, k, downsample=None):
     with h5py.File(output_file + f'{k}.hdf5', 'w') as h5f:
@@ -75,7 +87,6 @@ def convert_to_h5py(input_dir, output_file, bins=None, downsample=None, num_proc
     # Prepare arguments for multiprocessing
     args = [(bin, output_file, k, downsample) for k, bin in enumerate(filenames)]
     
-    # Use multiprocessing to process each bin
     with Pool(num_processes) as pool:
         pool.starmap(process_bin, args)
         
@@ -99,9 +110,10 @@ def stratify_login_days(input_dir):
         
 
 if __name__ == '__main__':
-    input_dir = 'data/train_test_data/traindata_240119_240411_zscore/'
-    out_file = 'data/train_test_data/traindata_240119_240411_zscore/dataset_'
+    input_dir = 'data/train_test_data/traindata_warmtype_240119_240411_zscore/'
+    out_file = 'data/train_test_data/traindata_warmtype_240119_240411_zscore/dataset_'
     bins = group_files_into_bins(input_dir)
-    downsample_func = partial(downsample_untreated_login, col1=614, col2=632)
+    # downsample_func = partial(downsample_untreated_login, col1=614, col2=632)
+    downsample_func = partial(downsample_to_least, target_columns=[614, 632, 665])
     convert_to_h5py(input_dir, out_file, bins, downsample=downsample_func)
     # stratify_login_days(input_dir)
