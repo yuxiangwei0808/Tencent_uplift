@@ -134,20 +134,28 @@ def mtmt_res_disc__emb_v0():
                 t_dim=1, u_dim=128, tu_dim=256)
 
 def mtmt_res_disc_mlp__emb_v0():
-    return  MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=8), 
+    return  MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=8, drop=0.2), 
                     DiscEncoder(embed_dim=8, out_shape='2d',
-                                enc=MLP(hidden_chans=[16, 32, 64], in_chans=9, transpose=True))
+                                enc=MLP(hidden_chans=[16, 32, 64], in_chans=9, transpose=True, norm_layer=nn.LayerNorm))
                 ]), 
                 treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
                 task_names=['label_nextday_login'],
                 t_dim=1, u_dim=64, tu_dim=128)
 
+def mtmt_res_disc_mlp__emb_v0_1():
+    return  MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=16, drop=0.2), 
+                    DiscEncoder(embed_dim=8, out_shape='2d',
+                                enc=MLP(hidden_chans=[16, 64, 128], in_chans=9, transpose=True, norm_layer=nn.LayerNorm))
+                ]), 
+                treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
+                task_names=['label_nextday_login'],
+                t_dim=1, u_dim=128, tu_dim=256)
 
 def mtmt_res_disc_mlp__emb_cnn_v0():
-    return  MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=8), 
+    return MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=8), 
                     DiscEncoder(embed_dim=8, out_shape='2d',
-                                enc=MLP(hidden_chans=[16, 32, 64], in_chans=9, transpose=True))
-                ]), 
+                                enc=MLP(hidden_chans=[16, 32, 64], in_chans=9, transpose=True, norm_layer=nn.LayerNorm))
+                                ]), 
                 treat_feat_enc=cnn_simple(in_chans=1, hidden_chans=[4, 8, 16], strides=[1, 1, 1], encoder=nn.Embedding(num_embeddings=2, embedding_dim=8)),
                 task_names=['label_nextday_login'],
                 t_dim=16, u_dim=64, tu_dim=128)
@@ -189,6 +197,11 @@ def mtmt_res_cnn_MLP_v0():
 def mtmt_res__emb_MLP_v0_4_0():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), 
                 treat_feat_enc=MLP(in_chans=1, transpose=True, hidden_chans=[4, 8, 16], drop_rate=0.1, encoder=nn.Embedding(num_embeddings=2, embedding_dim=8)),
+                task_names=['label_nextday_login'], t_dim=16, u_dim=128, tu_dim=256)
+
+def mtmt_res__emb_MLP_v0_4_1():
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), 
+                treat_feat_enc=MLP(in_chans=1, transpose=True, hidden_chans=[16], drop_rate=0.1, encoder=nn.Embedding(num_embeddings=2, embedding_dim=8)),
                 task_names=['label_nextday_login'], t_dim=16, u_dim=128, tu_dim=256)
 
 def mtmt_res__emb_cnn_v0_4_0():
