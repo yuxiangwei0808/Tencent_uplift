@@ -4,21 +4,24 @@ import torchvision
 
 
 class MLP(nn.Module):
-    def __init__(self, in_chans: int, hidden_chans: list, drop_rate: int=0, transpose=False, encoder=None):
+    def __init__(self, in_chans: int, hidden_chans: list, norm_layer: nn.Module, drop_rate: int=0, transpose=False, encoder=None):
         super().__init__()
         
         self.mlp = torchvision.ops.MLP(in_channels=in_chans, hidden_channels=hidden_chans, 
-                                        norm_layer=nn.LayerNorm, dropout=drop_rate)        
-        self.transpose = transpose
+                                        norm_layer=norm_layer, dropout=drop_rate)        
+        self.transpose = transpose  # input B C N
         self.encoder = encoder
 
     def forward(self, x):
         if self.encoder is not None:
-            assert x.dim() == 1
+            if x.dim() == 2:
+                assert self.transpose, "when input dim=2, emb shape is B C N, expect transpose"
             x = self.encoder(x.to(torch.long))
-        if x.dim() == 2:
-            x = x.unsqueeze(-1)
         x = x.permute(0, 2, 1) if self.transpose else x
+        
+        if x.dim() == 2:
+            x = x.unsqueeze(-1)  # B N C
+        
         x = self.mlp(x)
         x = x.permute(0, 2, 1) if self.transpose else x
         return x

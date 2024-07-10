@@ -41,7 +41,7 @@ class CNN(nn.Module):
 
 
 class BottleNeck(nn.Module):
-    def __init__(self, in_ch, out_ch, drop_rate):
+    def __init__(self, in_ch, out_ch, drop_rate, stride=2):
         super().__init__()
         self.enc = nn.Sequential(
             nn.Conv1d(in_ch, in_ch, kernel_size=3, padding=1, groups=in_ch),
@@ -49,7 +49,7 @@ class BottleNeck(nn.Module):
             nn.Conv1d(in_ch, 4 * in_ch, kernel_size=1),
             nn.GELU(),
             nn.BatchNorm1d(in_ch * 4),
-            nn.Conv1d(4 * in_ch, out_ch, kernel_size=1, stride=2), 
+            nn.Conv1d(4 * in_ch, out_ch, kernel_size=1, stride=stride), 
             nn.Dropout1d(drop_rate),
         )
 

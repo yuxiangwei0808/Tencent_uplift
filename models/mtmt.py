@@ -62,11 +62,7 @@ class MTMT(nn.Module):
         
         self.self_attention = MultiHeadAttn(embed_dim=tu_dim, qdim=t_dim, kdim=u_dim, vdim=u_dim, num_head=4, attn_drop=0.2)
         
-        self.tu_enhance = nn.Sequential(
-            # TODO try add layers here or use attention
-            Mlp(tu_dim, hidden_features=tu_dim // 2, norm_layer=tu_enhance_norm),
-            # MLP(tu_dim, [tu_dim * 2, tu_dim * 4, tu_dim * 2, tu_dim], drop_rate=0.2)
-        )
+        self.tu_enhance = Mlp(tu_dim, hidden_features=tu_dim // 2, norm_layer=tu_enhance_norm)
         
         self.tu_logit = ClsHead(tu_dim, 1)
         self.tu_tau   = ClsHead(tu_dim, 1)
@@ -106,18 +102,15 @@ class MTMT(nn.Module):
         treat_feat_s = self.treatment_enc_s(treat_s) if treat_s is not None else None
         
         u_logit = {task: self.u_tau[task](user_feat[task]).squeeze() for task in self.task_names}
-        
+                
         # TODO try add or weighted add (linear) insteand of cat
         # TODO maybe we need to calculate a tu_logit for each task
-        # TODO ablate norm dimension
         user_feat_cat = torch.cat([t for t in user_feat.values()], dim=1)  # B C N
-        user_feat_norm  = user_feat_cat / (torch.linalg.norm(user_feat_cat, dim=0, keepdim=True) + 1e-6)
+        user_feat_norm  = user_feat_cat / (torch.linalg.norm(user_feat_cat, dim=1, keepdim=True) + 1e-6)
 
-        treat_feat_norm = treat_feat / (torch.linalg.norm(treat_feat, dim=0, keepdim=True) + 1e-6)
-        # user_feat_norm = user_feat_cat
-        # treat_feat_norm = treat_feat
+        treat_feat = treat_feat.unsqueeze(-1) if treat_feat.dim() == 2 else treat_feat.transpose(-1, -2)  # B N C, C = 1
+        treat_feat_norm = treat_feat / (torch.linalg.norm(treat_feat, dim=-1, keepdim=True) + 1e-6)
 
-        treat_feat_norm = treat_feat_norm.unsqueeze(-1) if treat_feat_norm.dim() == 2 else treat_feat_norm.transpose(-1, -2)
         tu_feat, _ = self.self_attention(treat_feat_norm, user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))
 
         # enhance treatment-user feature
@@ -150,7 +143,7 @@ class MTMT(nn.Module):
 
         """For multi-task, there are two design choices: treat each task as regression and use mse, or treat each task as classification and use bce and projects label to 0-n"""
 
-        loss1 = sum([F.mse_loss((1 - treat) * (u_logit[t] + tu_tau).squeeze() + treat * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)])  # binary
+        loss1 = sum([F.mse_loss((1 - treat) * (u_logit[t]).squeeze() + treat * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)])  # binary
         # loss1 = F.mse_loss((1 - treat[:, 0]) * u_logit['nextday_login'].squeeze() + treat[:, 0] * tu_logit.squeeze(), y_true)  # v0
         # loss1 = F.mse_loss((1 - treat[:, 0]) * u_logit['nextday_login'].squeeze() + treat[:, 0] * ((1 - treat[:, 1]) * tu_logit.squeeze() + treat[:, 1] * tu_logit_s.squeeze()), y_true)  # tu_logit_s directly models tau, v1
         # loss1 = F.mse_loss(1 - treat[:, 0]) * u_logit['nextday_login'].squeeze() + treat[:, 0] * (tu_logit.squeeze() + treat[:, 1] * tu_logit_s.squeeze()), y_true)  # tu_logit_s models difference over 5AI
