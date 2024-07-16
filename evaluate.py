@@ -14,7 +14,7 @@ from models.dragonnet import DragonNet
 
 
 @torch.no_grad()
-def valid(model, valid_dataloader, device, num_org_feat, reduction=None):
+def valid(model, valid_dataloader, device, num_org_feat, reduction):
     model.eval()
     predictions = []
     true_labels = []
@@ -30,7 +30,10 @@ def valid(model, valid_dataloader, device, num_org_feat, reduction=None):
             feature_list = X[:, :-num_org_feat].to(device)
             add_features.extend(X[:, -num_org_feat:].numpy())
         is_treat = T.to(device)
-        label_list = valid_label.to(device)
+        if valid_label.shape[1] > len(target_task):
+            label_list = valid_label.to(device)[:, :-1]
+        else:
+            label_list = valid_label.to(device)
 
         if len(target_task) > 1:
             label_list = label_list[:, 1]  # use label_login_days_diff only
@@ -46,11 +49,10 @@ def valid(model, valid_dataloader, device, num_org_feat, reduction=None):
             _, _, uplift, _ = model(feature_list, is_treat)
         else:
             raise NotImplementedError
-        uplift = uplift.squeeze()
 
-        predictions.extend(uplift.detach().cpu())
-        true_labels.extend(label_list.detach().cpu().numpy())
-        is_treatment.extend(is_treat.detach().cpu().numpy())
+        predictions.extend(uplift.squeeze().detach().cpu())
+        true_labels.extend(label_list.squeeze().detach().cpu().numpy())
+        is_treatment.extend(is_treat.squeeze().detach().cpu().numpy())
 
     true_labels = np.array(true_labels)
     # predictions = torch.tensor(predictions)
@@ -94,11 +96,11 @@ def main(args):
     
     print('valid metrics: {} of {}'.format(checkpoint['metric'], args.ckpt_path))
     
-    valid_metrics, true_labels, predictions, treatment, add_features = valid(model, valid_dataloader, device, len(org_feat_idx))
+    valid_metrics, true_labels, predictions, treatment, add_features = valid(model, valid_dataloader, device, len(org_feat_idx), reduction)
     print('test metrics: {} of {}'.format(valid_metrics, args.ckpt_path))
     
     saving_path = args.ckpt_path.split('/')[-1][:-4]
-    saving_path = f'predictions/{args.data_type}/{args.norm_type}/{args.model_name}/test/{saving_path}'
+    saving_path = f'predictions/{args.test_data_type}/{args.norm_type}/{args.model_name}/test/{saving_path}'
 
     if isinstance(valid_metrics, list):
         for i in range(len(valid_metrics)):
@@ -115,7 +117,8 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt_path', type=str)
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
     parser.add_argument('--model_name', type=str, default='efin')
-    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow'], help='all data or a subset of data')
+    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'warmtype'], help='all data or a subset of data')
+    parser.add_argument('--test_data_type', type=str, default='full')
     args = parser.parse_args()
 
     torch.set_float32_matmul_precision('high')
@@ -124,17 +127,17 @@ if __name__ == '__main__':
     
     batch_size = 3840 * 16
 
-    file_path = [f'data/train_test_data/testdata_240412_240611_{args.norm_type}/dataset_{args.data_type}_0.hdf5']
+    file_path = [f'data/train_test_data/testdata_240412_240611_{args.norm_type}/dataset_{args.test_data_type}_0.hdf5']
 
     with open('data/train_test_data/OUT_COLUMN_new', 'r') as f:
         labels = f.readlines()
 
     labels = [x.strip('\n') for x in labels]
     org_feat_idx = [i for i in range(len(labels)) if 'origin' in labels[i]]
-    target_treatment = ['treatment_next_iswarm']
-    # 'treatment_next_is_9aiwarmround'
-    # target_task = ['label_nextday_login']
+    target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround'] if args.data_type == 'warmtype' else ['treatment_next_iswarm']
+    # target_task = ['label_login_days_diff']
     target_task = ['label_nextday_login', 'label_login_days_diff']
+    reduction = 'max'
     
     train_dataloader, valid_dataloader = get_data([*file_path], [*file_path], feature_group=None, batch_size=batch_size, addition_feat=org_feat_idx, target_treatment=target_treatment, target_task=target_task)
     
@@ -147,4 +150,4 @@ if __name__ == '__main__':
             assert args.norm_type in args.ckpt_path
             add_features = main(args)
         
-    np.savez_compressed(f'predictions/{args.data_type}/{args.norm_type}/{args.model_name}/test/add_features', feature=add_features)
+    np.savez_compressed(f'predictions/{args.test_data_type}/{args.norm_type}/{args.model_name}/test/add_features', feature=add_features)
