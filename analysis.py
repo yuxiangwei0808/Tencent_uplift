@@ -5,13 +5,20 @@ import pandas as pd
 import seaborn as sns
 import os
 
-from metrics import uplift_at_k, uplift_by_percentile
+from metrics import *
 from sklift.metrics import qini_auc_score, uplift_auc_score
 from sklift.viz import plot_qini_curve, plot_uplift_by_percentile, plot_uplift_curve
 
 
 def sigmoid(z):
     return 1/(1 + np.exp(-z))
+
+
+def calc_roc_pr(targets, preds):
+    preds_bin = sigmoid(preds)
+    preds_bin[preds_bin >= 0.5] = 1
+    preds_bin[preds_bin < 0.5] = 0
+    return roc_auc_score(targets, preds_bin), average_precision_score(targets, preds_bin)
 
 
 def plot_and_save_roc_auc(predictions, targets, filename='roc_auc.png'):
@@ -62,7 +69,13 @@ def plot_and_save_precision_recall_vs_threshold(predictions, targets, filename='
 
 def analysis_and_plot_uplift_qini_curves(targets, predictions, treats):
     # uplift_perc, qini, auuc, u_at_k = analysis(targets, predictions, treats)
-    print(uplift_by_percentile(targets, preds, treats))
+    uplift_perc = [uplift_by_percentile(t, p, tr) for t, p, tr in zip(targets, predictions, treats)]
+    uplift_perc = pd.concat(uplift_perc)
+    uplift_perc = uplift_perc.groupby(level=0).mean()
+    print(uplift_perc)
+    uplift_perc.to_csv(f'{source_dir}/uplift_perc.txt', sep='\t')
+
+    targets, preds, treats = np.concatenate(targets, 0), np.concatenate(preds, 0), np.concatenate(treats, 0)
     
     plt.figure()
     sns.displot(predictions, bins=100, kde=True)
@@ -92,9 +105,14 @@ def analysis(targets, preds, treats):
     # print(confusion_matrix(targets, preds_bin))
 
     uplifts = uplift_by_percentile(targets, preds, treats)
-    qini = qini_auc_score(targets, preds, treats)
-    auuc = uplift_auc_score(targets, preds, treats)
     u_at_k = uplift_at_k(targets, preds, treats, strategy='overall', k=0.3)
+
+    if len(np.unique(target)) > 2:
+        qini = qini_auc_score_woNorm(target, pred, treat)
+        auuc = uplift_auc_score_woNorm(target, pred, treat)
+    else:
+        qini = qini_auc_score(targets, preds, treats)
+        auuc = uplift_auc_score(targets, preds, treats)
 
     # plot_and_save_roc_auc(preds, targets)
     # plot_and_save_pr_auc(preds, targets)
@@ -105,10 +123,10 @@ def analysis(targets, preds, treats):
 
 def analysis_by_logindays(targets, preds, treats, add_feats):
     # analyze the results by each login days (add_feats[:, 1])
-    uplifts_percentiles, qinis, auucs, uks = [], [], [], []
+    uplifts_percentiles, qinis, auucs, uks = [[] for _ in range(5)], [[] for _ in range(5)], [[] for _ in range(5)], [[] for _ in range(5)]
     
-    if 'full' in source:
-        ranger = np.arange(15)
+    if 'backflow' in source:
+        ranger = np.arange(1)
     elif 'highactive' in source:
         ranger = np.arange(10, 15)
     elif 'midactive' in source:
@@ -116,25 +134,36 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     elif 'lowactive' in source:
         ranger = np.arange(1, 5)
     else:
-        ranger = np.arange(1)
+        ranger = np.arange(15)
     
-    for day in ranger:
-        idx = add_feats == day
-        uplifts, qini, auuc, u_at_k = analysis(targets[idx], preds[idx], treats[idx])
-        uplifts_percentiles.append(uplifts)
-        qinis.append(qini)
-        auucs.append(auuc)
-        uks.append(u_at_k)
-        
-        percentiles = list(uplifts['uplift'].keys())
+    for i, (t, p, tr, af) in enumerate(zip(targets, preds, treats, add_feats)):
+        for day in ranger:
+            idx = af[:, 1] == day
+            uplifts, qini, auuc, u_at_k = analysis(t[idx], p[idx], tr[idx])
+            uplifts_percentiles[i].append(uplifts)
+            qinis[i].append(qini)
+            auucs[i].append(auuc)
+            uks[i].append(u_at_k)
+    
+    percentiles = list(uplifts['uplift'].keys())
+
+    qinis, auucs, uks = np.array(qinis).mean(0), np.array(auucs).mean(0), np.array(uks).mean(0)
+    u_percentiles = []
+    for i in range(len(uplifts_percentiles[0])):
+        u_percentiles.append(pd.concat([uplifts_percentiles[j][i] for j in range(5)]).groupby(level=0).mean())
+    uplifts_percentiles = u_percentiles
             
     print('average qini: ', np.mean(qinis))
     print('average auuc: ', np.mean(auucs))
     print('average u at 0.3: ', np.mean(uks))
+
+    with open(f'{source_dir}/results.txt', 'a') as f:
+        f.write(f'\nby login days -- qini: {np.mean(qinis)}, auuc: {np.mean(auucs)}, u_0.3: {np.mean(uks)}')
     
     dfs = pd.concat(uplifts_percentiles)
-    print('average percentile: ', dfs.groupby(level=0).mean())
-    
+    dfs = dfs.groupby(level=0).mean()
+    print('average percentile: ', dfs)
+
     plt.figure()
     plt.plot(ranger, qinis)
     plt.grid(True)
@@ -160,23 +189,98 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     plt.savefig(f'{source_dir}/uplift_by_percentile_login.png')
 
 
+def analysis_by_rank(targets, preds, treats, add_feats):
+    rank_names = ['iron', 'copper', 'silver', 'gold', 'plat', 'em4', 'em3', 'em2', 'em1', 'dia4', 'dia3', 'dia2', 'dia1', 'master0']
+    ranks = [np.arange(1, 5), np.arange(5, 9), np.arange(9, 13), np.arange(13, 17), np.arange(17, 21)]
+    ranks.extend([[i] for i in range(21, 30)])
+
+    uplifts_percentiles, qinis, auucs, uks = [[] for _ in range(5)], [[] for _ in range(5)], [[] for _ in range(5)], [[] for _ in range(5)]
+
+    for i, (t, p, tr, af) in enumerate(zip(targets, preds, treats, add_feats)):
+        for rank in ranks:
+            idx = [i for i, r in enumerate(af[:, 0]) if r in rank]
+            uplifts, qini, auuc, u_at_k = analysis(t[idx], p[idx], tr[idx])
+            uplifts_percentiles[i].append(uplifts)
+            qinis[i].append(qini)
+            auucs[i].append(auuc)
+            uks[i].append(u_at_k)
+
+    qinis, auucs, uks = np.array(qinis).mean(0), np.array(auucs).mean(0), np.array(uks).mean(0)
+    u_percentiles = []
+    for i in range(len(uplifts_percentiles[0])):
+        u_percentiles.append(pd.concat([uplifts_percentiles[j][i] for j in range(5)]).groupby(level=0).mean())
+    uplifts_percentiles = u_percentiles
+    print('average qini by rank: ', np.mean(qinis))
+    print('average auuc by rank: ', np.mean(auucs))
+    print('average u at 0.3 by rank: ', np.mean(uks))
+
+    with open(f'{source_dir}/results.txt', 'a') as f:
+        f.write('\n========= By Rank =================')
+        f.write(f'\nby rank -- qini: {np.mean(qinis)}, auuc: {np.mean(auucs)}, u_0.3: {np.mean(uks)}')
+        qinis = [str(round(i, 4)) for i in qinis]
+        auucs = [str(round(i, 4)) for i in auucs]
+        uks = [str(round(i, 4)) for i in uks]
+        f.write(f'\n{" ".join(qinis)}')
+        f.write(f'\n{" ".join(auucs)}')
+        f.write(f'\n{" ".join(uks)}')
+
+    dfs = pd.concat(uplifts_percentiles)
+    dfs = dfs.groupby(level=0).mean()
+    print('average percentile by rank: ', dfs)
+    dfs.to_csv(f'{source_dir}/uplift_perc_rank.txt', sep='\t')
+
+    plt.figure()
+    plt.plot(range(len(rank_names)), qinis)
+    plt.xlabel('rank')
+    plt.ylabel('QINI')
+    plt.xticks(range(len(rank_names)), rank_names, rotation='vertical')
+    plt.tight_layout()
+    plt.grid(True)
+    for i, value in enumerate(qinis):
+        plt.annotate(str(value), xy=(i, value), textcoords='offset points', xytext=(0, 10), ha='center')
+    plt.savefig(f'{source_dir}/qini_rank.png')
+
+    plt.figure()
+    plt.plot(range(len(rank_names)), auucs)
+    plt.xlabel('rank')
+    plt.ylabel('AUUC')
+    plt.xticks(range(len(rank_names)), rank_names, rotation='vertical')
+    plt.tight_layout()
+    plt.grid(True)
+    for i, value in enumerate(auucs):
+        plt.annotate(str(value), xy=(i, value), textcoords='offset points', xytext=(0, 10), ha='center')
+    plt.savefig(f'{source_dir}/auuc_rank.png')
+
+    plt.figure()
+    plt.plot(range(len(rank_names)), uks)
+    plt.xlabel('rank')
+    plt.ylabel('u_at_k')
+    plt.xticks(range(len(rank_names)), rank_names, rotation='vertical')
+    plt.tight_layout()
+    for i, value in enumerate(uks):
+        plt.annotate(str(value), xy=(i, value), textcoords='offset points', xytext=(0, 10), ha='center')
+    plt.savefig(f'{source_dir}/uk_rank.png')
+
+
 metric = 'u_at_k'
 treat_name = ''
-model_name = 'mtmt_res_emb_v0_4_0_EFIN_tauControl'
-source = f'predictions/full/zscore/{model_name}/test/'
+model_name = 'mtmt_res_emb_v0_4_0_EFIN_l1+0.2l5'
+data_type = 'random'
+source = f'predictions/{data_type}/zscore/{model_name}/test/'
 
 print(model_name, metric, treat_name)
 
-source_dir = os.path.join('results', model_name, metric, treat_name)
+source_dir = os.path.join('results', model_name, data_type, metric, treat_name)
 if not os.path.isdir(source_dir):
     os.makedirs(source_dir)
 
 targets, preds, treats, add_feats = [], [], [], []
 
 u_at_k = qini = auuc = 0
+roc = pr = 0
 ind_ai = None
 
-add_feat = np.load(source + 'add_features.npz')['feature'][:, 1]
+add_feat = np.load(source + 'add_features.npz')['feature']
 for i in range(5):
     path = source + f'{model_name}_{i}_{metric}_{treat_name}.npz' if treat_name != '' else source + f'{model_name}_{i}_{metric}.npz'
     predictions = np.load(path)
@@ -195,18 +299,26 @@ for i in range(5):
     preds.append(pred)
     treats.append(treat)
     u_at_k += predictions['u_at_k']
-    qini += predictions['QINI']
-    auuc += predictions['AUUC']
+    if len(np.unique(target)) > 2:
+        qini += qini_auc_score_woNorm(target, pred, treat)
+        auuc += uplift_auc_score_woNorm(target, pred, treat)
+    else:
+        qini += predictions['QINI']
+        auuc += predictions['AUUC']
+    
+    # r, p = calc_roc_pr(target, pred)
+    # roc += r
+    # pr += p
 
     if ind_ai is not None:
         add_feats.append(add_feat[ind_control | ind_ai])
     else:
         add_feats.append(add_feat)
 
-print('qini: {}, auuc: {}, u at 0.3: {}'.format(qini / 5, auuc / 5, u_at_k / 5))
+print('qini: {}, auuc: {}, u at 0.3: {}, roc: {}, pr: {}'.format(qini / 5, auuc / 5, u_at_k / 5, roc / 5, pr / 5))
+with open(f'{source_dir}/results.txt', 'w') as f:
+    f.write('qini: {}, auuc: {}, u at 0.3: {}, roc: {}, pr: {}'.format(qini / 5, auuc / 5, u_at_k / 5, roc / 5, pr / 5))
 
-targets, preds, treats, add_feats = np.concatenate(targets, 0), np.concatenate(preds, 0), np.concatenate(treats, 0), np.concatenate(add_feats, 0)
-
+# analysis_by_logindays(targets, preds, treats, add_feats)
+analysis_by_rank(targets, preds, treats, add_feats)
 analysis_and_plot_uplift_qini_curves(targets, preds, treats)
-
-analysis_by_logindays(targets, preds, treats, add_feats)
