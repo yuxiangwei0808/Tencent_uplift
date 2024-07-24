@@ -75,7 +75,7 @@ def analysis_and_plot_uplift_qini_curves(targets, predictions, treats):
     print(uplift_perc)
     uplift_perc.to_csv(f'{source_dir}/uplift_perc.txt', sep='\t')
 
-    targets, preds, treats = np.concatenate(targets, 0), np.concatenate(preds, 0), np.concatenate(treats, 0)
+    targets, predictions, treats = np.concatenate(targets, 0), np.concatenate(predictions, 0), np.concatenate(treats, 0)
     
     plt.figure()
     sns.displot(predictions, bins=100, kde=True)
@@ -189,17 +189,37 @@ def analysis_by_logindays(targets, preds, treats, add_feats):
     plt.savefig(f'{source_dir}/uplift_by_percentile_login.png')
 
 
+def plot_qinis_auucs_by_rank(targets, preds, treats, rank_name):
+    if not os.path.isdir(f'{source_dir}/qinis'):
+        os.mkdir(f'{source_dir}/qinis')
+    if not os.path.isdir(f'{source_dir}/auucs'):
+        os.mkdir(f'{source_dir}/auucs')
+
+    qini_disp = plot_qini_curve(targets, preds, treats)
+    plt.savefig(f'{source_dir}/qinis/qini_{rank_name}.png', bbox_inches='tight')
+    plt.close()
+    
+    auuc_disp = plot_uplift_curve(targets, preds, treats)
+    plt.savefig(f'{source_dir}/auucs/auuc_{rank_name}.png', bbox_inches='tight')
+    plt.close()
+
+
 def analysis_by_rank(targets, preds, treats, add_feats):
-    rank_names = ['iron', 'copper', 'silver', 'gold', 'plat', 'em4', 'em3', 'em2', 'em1', 'dia4', 'dia3', 'dia2', 'dia1', 'master0']
-    ranks = [np.arange(1, 5), np.arange(5, 9), np.arange(9, 13), np.arange(13, 17), np.arange(17, 21)]
-    ranks.extend([[i] for i in range(21, 30)])
+    ranks = [[0], np.arange(1, 5), np.arange(5, 9), np.arange(9, 13), np.arange(13, 17), np.arange(17, 21)]
+    if data_type != 'warmtype':
+        rank_names = ['unrank', 'iron', 'copper', 'silver', 'gold', 'plat', 'em4', 'em3', 'em2', 'em1', 'dia4', 'dia3', 'dia2', 'dia1', 'master0']
+        ranks.extend([[i] for i in range(21, 30)])
+    else:
+        rank_names = ['unrank', 'iron', 'copper', 'silver', 'gold', 'plat']
 
     uplifts_percentiles, qinis, auucs, uks = [[] for _ in range(5)], [[] for _ in range(5)], [[] for _ in range(5)], [[] for _ in range(5)]
 
     for i, (t, p, tr, af) in enumerate(zip(targets, preds, treats, add_feats)):
-        for rank in ranks:
+        for rank_id, rank in enumerate(ranks):
             idx = [i for i, r in enumerate(af[:, 0]) if r in rank]
             uplifts, qini, auuc, u_at_k = analysis(t[idx], p[idx], tr[idx])
+            plot_qinis_auucs_by_rank(t[idx], p[idx], tr[idx], rank_names[rank_id])
+
             uplifts_percentiles[i].append(uplifts)
             qinis[i].append(qini)
             auucs[i].append(auuc)
@@ -264,7 +284,7 @@ def analysis_by_rank(targets, preds, treats, add_feats):
 
 metric = 'u_at_k'
 treat_name = ''
-model_name = 'mtmt_res_emb_v0_4_0_EFIN_l1+0.2l5'
+model_name = 'mtmt_res_emb_v0_4_0_EFIN'
 data_type = 'random'
 source = f'predictions/{data_type}/zscore/{model_name}/test/'
 
@@ -300,15 +320,16 @@ for i in range(5):
     treats.append(treat)
     u_at_k += predictions['u_at_k']
     if len(np.unique(target)) > 2:
+        print(1)
         qini += qini_auc_score_woNorm(target, pred, treat)
         auuc += uplift_auc_score_woNorm(target, pred, treat)
     else:
         qini += predictions['QINI']
         auuc += predictions['AUUC']
     
-    # r, p = calc_roc_pr(target, pred)
-    # roc += r
-    # pr += p
+    r, p = calc_roc_pr(target, pred)
+    roc += r
+    pr += p
 
     if ind_ai is not None:
         add_feats.append(add_feat[ind_control | ind_ai])
@@ -319,6 +340,6 @@ print('qini: {}, auuc: {}, u at 0.3: {}, roc: {}, pr: {}'.format(qini / 5, auuc 
 with open(f'{source_dir}/results.txt', 'w') as f:
     f.write('qini: {}, auuc: {}, u at 0.3: {}, roc: {}, pr: {}'.format(qini / 5, auuc / 5, u_at_k / 5, roc / 5, pr / 5))
 
-# analysis_by_logindays(targets, preds, treats, add_feats)
+analysis_by_logindays(targets, preds, treats, add_feats)
 analysis_by_rank(targets, preds, treats, add_feats)
 analysis_and_plot_uplift_qini_curves(targets, preds, treats)

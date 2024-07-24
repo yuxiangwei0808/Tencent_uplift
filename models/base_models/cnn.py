@@ -74,7 +74,7 @@ class CNNBottleneck(nn.Module):
 
 
 def cnn_simple(hidden_chans, in_chans=1, strides=[2, 2, 2, 2], **kwargs):
-    return CNN(in_chans=in_chans, hidden_chans=hidden_chans, strides=strides, drop_rate=0.2, **kwargs)
+    return CNN(in_chans=in_chans, hidden_chans=hidden_chans, strides=strides, drop_rate=0.1, **kwargs)
 
 def cnn_bottleneck_simple(hidden_chans):
-    return CNNBottleneck(in_chans=1, hidden_chans=hidden_chans, drop_rate=0.2)
+    return CNNBottleneck(in_chans=1, hidden_chans=hidden_chans, drop_rate=0.1)

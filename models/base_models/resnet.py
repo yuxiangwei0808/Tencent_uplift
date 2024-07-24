@@ -102,7 +102,7 @@ class Bottleneck(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
-        self.drop_out = nn.DropPath(drop) if drop > 0 else nn.Identity()
+        self.drop_out = nn.Dropout(drop) if drop > 0 else nn.Identity()
 
     def forward(self, x):
         identity = x

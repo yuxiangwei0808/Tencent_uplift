@@ -124,11 +124,29 @@ def stratify_login_days(input_dir):
     for k in sampled_data:
         with h5py.File(input_dir + f'dataset_{k}_0.hdf5', 'w') as h5f:
             dataset = h5f.create_dataset('data', data=np.concatenate(sampled_data[k], axis=0), chunks=(3840, 685))
-        
+
+
+def fix_logdays_diff():
+    # fix the login days diff by re-calculating using pre_7 and after_7
+    source = 'data/train_test_data/traindata_240119_240411_zscore'
+    file = os.listdir(source)
+    pre7 = np.array([-2.49498, -2.02024, -1.5455 , -1.07075, -0.59601, -0.12127, 0.35347,  0.82821])  # pre7 after zscore
+    mapping = {v: idx for idx, v in enumerate(pre7)}
+    for f in file:
+        if 'hdf5' not in f:
+            continue
+        path = os.path.join(source, f)
+
+        with h5py.File(path, 'r+') as data:
+            arr = data['data'][:]
+            arr[:, 645] = arr[:, 639] - np.array([mapping[val] for val in arr[:, 379]])
+            data['data'][:] = arr
+
 
 if __name__ == '__main__':
-    input_dir = 'data/testdata_240412_240528_minmax/'
-    out_file = 'data/traindata_240119_240411_minmax/dataset_'
+    # input_dir = 'data/testdata_240412_240528_minmax/'
+    # out_file = 'data/traindata_240119_240411_minmax/dataset_'
     # bins = group_files_into_bins(input_dir)
     # convert_to_h5py(input_dir, out_file, bins, downsample=downsample_untreated_login)
-    stratify_login_days(input_dir)
+    # stratify_login_days(input_dir)
+    fix_logdays_diff()

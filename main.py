@@ -33,11 +33,14 @@ def valid(model, valid_dataloader, device, epoch, reduction):
 
     for step, (X, T, valid_label) in enumerate(tqdm(valid_dataloader)):
         if isinstance(X, list):
-                feature_list = [f.to(device) for f in X]
+            feature_list = [f.to(device) for f in X]
         else:
             feature_list = X.to(device)
         is_treat = T.to(device)
-        label_list = valid_label.to(device)
+        if valid_label.shape[1] > len(target_task):
+            label_list = valid_label.to(device)[:, :-1]  # exclude pre30_logindays
+        else:
+            label_list = valid_label.to(device)
 
         if len(target_task) > 1:
             label_list = label_list[:, 1]  # use label_login_days_diff only
@@ -51,11 +54,14 @@ def valid(model, valid_dataloader, device, epoch, reduction):
             elif 'mtmt' in args.model_name:
                 # y0, _, y1, _ = model(feature_list, is_treat)
                 # uplift = y1 - y0['nextday_login']
-                _, _, uplift, _ = model(feature_list, is_treat)
+                _, prps, uplift, uplift_s = model(feature_list, is_treat)
             else:
                 raise NotImplementedError
+            
+        if uplift_s != None:
+            uplift = (uplift + uplift_s * (torch.sigmoid(prps) > 0.5))
+        
         uplift = uplift.squeeze()
-
         predictions.extend(uplift.squeeze().cpu().detach())
         true_labels.extend(label_list.squeeze().cpu().detach().numpy())
         is_treatment.extend(is_treat.squeeze().cpu().detach().numpy())
@@ -163,7 +169,7 @@ def train(local_rank, train_files, test_files, fold_idx):
             optimizer.zero_grad()
 
             if 'dragonnet' in args.model_name or not args.enable_amp:  # unsafe bce for dragonnet, which does not allow autocast
-                loss = model.calculate_loss(feature_list, is_treat, label_list)
+                loss = model.calculate_loss(feature_list, is_treat, label_list, target_task)
             else:
                 with autocast():
                     loss = model.calculate_loss(feature_list, is_treat, label_list, target_task)
@@ -228,14 +234,14 @@ if __name__ == "__main__":
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--world_size', type=int, default=1)
     parser.add_argument('--fold_ids', type=int, nargs='+', help='train the given folds')
+    parser.add_argument('--num_folds', type=int, default=5)
     parser.add_argument('--resume', action='store_true', default=False, help='resume training from checkpoint')
     parser.add_argument('--ckpt_path', type=str)
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
     parser.add_argument('--model_name', type=str, default='mtmt')
     parser.add_argument('--enable_mlflow', action='store_true', default=False)
-    parser.add_argument('--enable_amp', action='store_true', default=False)
+    parser.add_argument('--enable_amp', action='store_true', default=True)
     parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'warmtype'], help='all data or a subset of data')
-    parser.add_argument('--multi_treat', action='store_true', default=False, help='test multi_treatment')
     parser.add_argument('--note', type=str, help='additional notes')
     args = parser.parse_args()
 
@@ -280,12 +286,12 @@ if __name__ == "__main__":
         folds_mid  = create_folds([f'data/traindata_midactive_240119_240411_{args.norm_type}/dataset_{i}.hdf5' for i in range(10)])
         folds = [[t0 + t1 + t2 for t0, t1, t2 in zip(x, y, z)] for x, y, z in zip(folds_back, folds_low, folds_mid)]
     else:
-        folds = create_folds(file_paths, n_folds=5)
+        folds = create_folds(file_paths, n_folds=args.num_folds)
         
     ave_best_valid_metrics = None
     target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround'] if args.data_type == 'warmtype' else ['treatment_next_iswarm']
     target_task = ['label_nextday_login']
-    reduction = 'max'
+    reduction = 'mean'
     
     fold_enumerator = enumerate(folds)
     fold_run = 0
@@ -293,7 +299,13 @@ if __name__ == "__main__":
     for fold_idx, (train_files, test_files) in fold_enumerator:
         if args.fold_ids is not None and fold_idx not in args.fold_ids:
             continue
-        logger.info("Fold {} start".format(fold_idx))        
+        logger.info("Fold {} start".format(fold_idx))
+
+        if args.num_folds == 1:  # use all data to train and use the random test data
+            args.data_type = all
+            logger.info('use all data to train the model and use random data to select the best epoch')
+            test_files = ['data/train_test_data/testdata_240412_240611_zscore/dataset_random_0.hdf5']
+            print(train_files)
         
         best_valid_metrics = train(local_rank, train_files, test_files, fold_idx)
         print(f'best metrics for fold {fold_idx}: {best_valid_metrics}')

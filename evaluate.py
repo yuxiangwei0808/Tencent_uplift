@@ -6,11 +6,11 @@ import argparse
 from tqdm import tqdm
 from sklift.metrics import uplift_auc_score, qini_auc_score, uplift_by_percentile
 from metrics import uplift_at_k, weighted_average_uplift, metrics_mt
+from collections import OrderedDict
 
 from data_loader import get_data, create_folds
 from utils import *
 from models.efin import EFIN
-from models.dragonnet import DragonNet
 
 
 @torch.no_grad()
@@ -31,7 +31,7 @@ def valid(model, valid_dataloader, device, num_org_feat, reduction):
             add_features.extend(X[:, -num_org_feat:].numpy())
         is_treat = T.to(device)
         if valid_label.shape[1] > len(target_task):
-            label_list = valid_label.to(device)[:, :-1]
+            label_list = valid_label.to(device)[:, :-1]  # exclude pre30_logindays
         else:
             label_list = valid_label.to(device)
 
@@ -46,9 +46,12 @@ def valid(model, valid_dataloader, device, num_org_feat, reduction):
         elif 'mtmt' in args.model_name:
             # y0, _, y1 = model(feature_list, is_treat)
             # uplift = y1 - y0['nextday_login']
-            _, _, uplift, _ = model(feature_list, is_treat)
+            _, prps, uplift, uplift_s = model(feature_list, is_treat)
         else:
             raise NotImplementedError
+
+        if uplift_s != None:
+            uplift = (uplift + uplift_s * (torch.sigmoid(prps) > 0.5))
 
         predictions.extend(uplift.squeeze().detach().cpu())
         true_labels.extend(label_list.squeeze().detach().cpu().numpy())
@@ -89,10 +92,16 @@ def main(args):
     model, model_kawrgs = get_model(name=args.model_name)
     model = model.to(device)
 
-    model = torch.compile(model)
+    # model = torch.compile(model)
 
     checkpoint = torch.load(args.ckpt_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
+
+    # state_dict = OrderedDict()
+    # for k, v in checkpoint['model_state_dict'].items():
+    #     state_dict[k[10:]] = v
+    # model.load_state_dict(state_dict)
+
     
     print('valid metrics: {} of {}'.format(checkpoint['metric'], args.ckpt_path))
     
@@ -125,7 +134,7 @@ if __name__ == '__main__':
     torch.cuda.set_device(args.local_rank)
     device = torch.device(f'cuda:{args.local_rank}')
     
-    batch_size = 3840 * 16
+    batch_size = 3840 * 8
 
     file_path = [f'data/train_test_data/testdata_240412_240611_{args.norm_type}/dataset_{args.test_data_type}_0.hdf5']
 
@@ -135,9 +144,9 @@ if __name__ == '__main__':
     labels = [x.strip('\n') for x in labels]
     org_feat_idx = [i for i in range(len(labels)) if 'origin' in labels[i]]
     target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround'] if args.data_type == 'warmtype' else ['treatment_next_iswarm']
-    # target_task = ['label_login_days_diff']
-    target_task = ['label_nextday_login', 'label_login_days_diff']
-    reduction = 'max'
+    target_task = ['label_nextday_login']
+    # target_task = ['label_nextday_login', 'label_login_days_diff']
+    reduction = None
     
     train_dataloader, valid_dataloader = get_data([*file_path], [*file_path], feature_group=None, batch_size=batch_size, addition_feat=org_feat_idx, target_treatment=target_treatment, target_task=target_task)
     

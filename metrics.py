@@ -2,6 +2,44 @@ import torch
 import numpy as np
 import pandas as pd
 
+from sklearn.utils.validation import check_consistent_length
+from sklearn.metrics import auc
+from sklift.utils import check_is_binary
+from sklift.metrics import qini_curve, uplift_curve
+
+
+def qini_auc_score_woNorm(y_true, uplift, treatment, negative_effect=True):
+    check_consistent_length(y_true, uplift, treatment)
+    check_is_binary(treatment)
+    check_is_binary(y_true)
+    y_true, uplift, treatment = np.array(y_true), np.array(uplift), np.array(treatment)
+
+    if not isinstance(negative_effect, bool):
+        raise TypeError(f'Negative_effects flag should be bool, got: {type(negative_effect)}')
+
+    x_actual, y_actual = qini_curve(y_true, uplift, treatment)
+    x_baseline, y_baseline = np.array([0, x_actual[-1]]), np.array([0, y_actual[-1]])
+
+    auc_score_baseline = auc(x_baseline, y_baseline)
+    auc_score_actual = auc(x_actual, y_actual) - auc_score_baseline
+
+    return auc_score_actual / (x_actual[-1] - x_actual[0])
+
+
+def uplift_auc_score_woNorm(y_true, uplift, treatment):
+    check_consistent_length(y_true, uplift, treatment)
+    check_is_binary(treatment)
+    check_is_binary(y_true)
+    y_true, uplift, treatment = np.array(y_true), np.array(uplift), np.array(treatment)
+
+    x_actual, y_actual = uplift_curve(y_true, uplift, treatment)
+    x_baseline, y_baseline = np.array([0, x_actual[-1]]), np.array([0, y_actual[-1]])
+
+    auc_score_baseline = auc(x_baseline, y_baseline)
+    auc_score_actual = auc(x_actual, y_actual) - auc_score_baseline
+
+    return auc_score_actual / (x_actual[-1] - x_actual[0])
+
 
 def metrics_mt(metric, y_true, uplift, treat, reduce=None):
     # multi-treatment version

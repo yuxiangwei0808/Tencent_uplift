@@ -68,6 +68,8 @@ def collate_fn_ndarray(batch: np.ndarray, target_treatment: list, target_task: l
 
 
 def create_folds(file_paths, n_folds=5):
+    if n_folds == 1:
+        return [(file_paths, file_paths)]
     sub_datasets = [(file_paths[i], file_paths[i+1]) for i in range(0, len(file_paths), 2)]
     kf = KFold(n_splits=n_folds, shuffle=False)
     
@@ -155,8 +157,10 @@ def get_data(train_files, test_files, target_treatment, target_task, batch_size=
     
     treatment_index = [idx for idx, elem in enumerate(labels) if elem in target_treatment]
     task_index = [idx for idx, elem in enumerate(labels) if elem in target_task]
+    task_index.append(371)  # pre30_login_days, used for additional regularization
     
-    feature_index = [idx for idx, elem in enumerate(labels) if elem[:3] == 'fea']
+    feature_index = [idx for idx, elem in enumerate(labels) if elem[:3] == 'fea' and 'login_days' not in elem]
+    # feature_index = [idx for idx, elem in enumerate(labels) if elem[:3] == 'fea']
     if feature_group != None:
         pad = True if 'pad' in feature_group else False
         feature_index = list(filter(lambda i: i not in list(range(537, 607)) + feature_groups.indices, feature_index))
@@ -181,7 +185,6 @@ def get_data(train_files, test_files, target_treatment, target_task, batch_size=
     return train_loader, test_loader
 
 
-
 def get_data_criteo(batch_size, fold_idx):
     dataset = DatasetCriteo()
     
@@ -199,13 +202,13 @@ def get_data_criteo(batch_size, fold_idx):
 
 class DatasetCriteo(Dataset):
     def __init__(self):
-        self.data = np.load('data/tencent_data_zscore/criteo/criteo_data.npy').astype(np.float32)
-        self.treat = np.load('data/tencent_data_zscore/criteo/criteo_treat.npy', allow_pickle=True).astype(np.float32)
-        self.target = np.load('data/tencent_data_zscore/criteo/criteo_target.npy', allow_pickle=True).astype(np.float32)
+        self.data = np.load('data/criteo/criteo_data.npy').astype(np.float32)
+        self.treat = np.load('data/criteo/criteo_treat.npy', allow_pickle=True).astype(np.float32)
+        self.target = np.load('data/criteo/criteo_target.npy', allow_pickle=True).astype(np.float32)
 
         self.data = torch.as_tensor(self.data)
         self.treat =  torch.as_tensor(self.treat)
-        self.target = torch.as_tensor(self.target)
+        self.target = torch.as_tensor(self.target).unsqueeze(1)
     
     def __len__(self):
         return len(self.data)
