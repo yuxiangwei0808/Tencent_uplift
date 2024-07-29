@@ -175,7 +175,7 @@ class MTMT(nn.Module):
 
         return u_logit, tu_tau, tu_logit, tu_logit_s
         
-    def calculate_loss(self, user_input, treat, y_true, target_task):
+    def calculate_loss(self, user_input, treat, y_true, target_task, reduction='sum'):
         # TODO try different weight balancing for MTL
         # TODO multi-treatment        
         u_logit, tu_tau, tu_logit, tu_logit_s = self.forward(user_input, treat)
@@ -185,34 +185,41 @@ class MTMT(nn.Module):
         
         """For multi-task, there are two design choices: treat each task as regression and use mse, or treat each task as classification and use bce and projects label to 0-n"""
         if treat.dim() == 1:  # single treatment
-            loss1 = sum([F.mse_loss((1 - treat) * u_logit[t].squeeze() + treat * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)])  # binary
+            if reduction == 'sum':
+                loss1 = sum([F.mse_loss((1 - treat) * u_logit[t].squeeze() + treat * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)])  # binary
+            elif reduction == 'mean':
+                loss1 = sum([F.mse_loss((1 - treat) * u_logit[t].squeeze() + treat * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)]) / len(target_task) # binary
+            elif reduction == 'none':
+                loss1 = [F.mse_loss((1 - treat) * u_logit[t].squeeze() + treat * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)]
         else:
             # Control * y0 + Treatment * (y0 + tau)
             # loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)])  # v0
             # Control * y0 + (5AI * (y0 + tau) + 9AI * (y0 + tau_s)).
-            # TODO: try 1. 5AI/control -> tau, 9AI/control -> tau_s  2. treat/control -> tau, 9AI/control -> tau_s  3. control/5AI/9AI -> tau/tau_s
+            # 1. 5AI/control -> tau, 9AI/control -> tau_s  2. treat/control -> tau, 9AI/control -> tau_s  3. control/5AI/9AI -> tau/tau_s
             # loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * ((1 - treat[:, 1]) * (tu_logit + u_logit[t].detach()).squeeze() + treat[:, 1] * (tu_logit_s + u_logit[t].detach()).squeeze()), y_true[:, i]) for i, t in enumerate(target_task)])  # tu_logit_s directly models tau of 9AI, v1
             # Control * y0 + Treatment * ((y0 + tau) + 9AI * tau_s).
-            # TODO try 2. 5AI/control -> tau, 5AI/9AI -> tau_s -> tau_s 3. control/5AI/9AI -> tau/tau_s  4. control/5AI/9AI -> tau, 5AI/9AI -> tau_s
-            loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() * (1 - F.sigmoid(tu_tau)) + F.sigmoid(tu_tau) * treat[:, 0] * ((tu_logit + u_logit[t].detach()).squeeze() + treat[:, 1] * tu_logit_s.squeeze()), y_true[:, i]) for i, t in enumerate(target_task)])  # tu_logit_s models difference over 5AI
+            # 2. 5AI/control -> tau, 5AI/9AI -> tau_s -> tau_s 3. control/5AI/9AI -> tau/tau_s  4. control/5AI/9AI -> tau, 5AI/9AI -> tau_s
+            loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * ((tu_logit + u_logit[t].detach()).squeeze() + treat[:, 1] * tu_logit_s.squeeze()), y_true[:, i]) for i, t in enumerate(target_task)])  # tu_logit_s models difference over 5AI
             # Control * y0 + Treatment * (y0 + tau + tau_s). 5. treat/control -> tau, 5AI/9AI/control -> tau_s
             # loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * ((tu_logit + tu_logit_s + u_logit[t].detach()).squeeze()), y_true[:, i]) for i, t in enumerate(target_task)])  # tu_logit_s models difference over treat
         
         # ESN IPW regularize
         # tu_tau = torch.sigmoid(tu_tau)
         # loss2 = F.binary_cross_entropy_with_logits(tu_logit * tu_tau, y_true * treat) + F.binary_cross_entropy_with_logits(u_logit['nextday_login'] * (1 - tu_tau), y_true * (1 - treat))
-        # loss2 = F.mse_loss(tu_logit * torch.sigmoid(tu_tau), y_true * treat) + F.mse_loss(u_logit['nextday_login'] * (1 - torch.sigmoid(tu_tau)), y_true * (1 - treat))
+        # loss2 = F.mse_loss(tu_logit * torch.sigmoid(tu_tau), y_true.squeeze() * treat) + F.mse_loss(u_logit['label_nextday_login'] * (1 - torch.sigmoid(tu_tau)), y_true.squeeze() * (1 - treat))
         # loss2 = F.mse_loss((1 - treat) * u_logit['nextday_login'].squeeze() * (1 - tu_tau) + treat * tu_logit.squeeze() * tu_tau, y_true)
         # loss_pr = F.binary_cross_entropy_with_logits(tu_tau, treat)
         
         # interfere the model not to directly classify samples for treatments
         # loss3 = F.binary_cross_entropy_with_logits(tu_tau.squeeze(), 1 - treat)  # binary
+        
+        # determine wheter treatment
+        # loss6 = F.binary_cross_entropy_with_logits(tu_tau * treat[:, 0], treat[:, 1] * treat[:, 0])
 
         # lower tau for active players but not necessarily vice versa; set pre30 > 25 (0.58) as high active
         treat = treat[:, 0] if treat.dim() > 1 else treat
         loss5 = torch.clamp(F.mse_loss(1 - tu_logit, torch.ones_like(tu_logit, device=tu_logit.device), reduction='none') * (y_true[:, 1] > 0.6) * treat, min=0.2).mean()
-
-        # determine wheter treatment
-        # loss6 = F.binary_cross_entropy_with_logits(tu_tau, treat) * 0.1
-        
+       
+        if reduction == 'none':
+            return loss1, loss5
         return loss1 + loss5

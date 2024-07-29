@@ -6,4 +6,5 @@ __pycache__/
 results/
 mlruns/
 *.png
-slurm_script.sh
+*.out
+*.sh

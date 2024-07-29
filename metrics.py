@@ -41,9 +41,12 @@ def uplift_auc_score_woNorm(y_true, uplift, treatment):
     return auc_score_actual / (x_actual[-1] - x_actual[0])
 
 
-def metrics_mt(metric, y_true, uplift, treat, reduce=None):
+def metrics_mt(metric, y_true, uplift, treat, m_treat=False, reduce=None):
     # multi-treatment version
     # `treat` should be N*T, where the first element denotes treatment/control
+
+    if not m_treat:
+        return metric(y_true, uplift, treat)
 
     ind_control = treat[:, 0] == 0
     ind_5ai = (treat[:, 0] == 1) & (treat[:, 1] == 0)

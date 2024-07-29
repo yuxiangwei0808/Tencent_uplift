@@ -284,13 +284,14 @@ def analysis_by_rank(targets, preds, treats, add_feats):
 
 metric = 'u_at_k'
 treat_name = ''
-model_name = 'mtmt_res_emb_v0_4_0_EFIN'
-data_type = 'random'
+task_name = 'login'
+model_name = 'MTask-mtmt_mmoe_emb_v1_EFIN_l1+0.2l5_diffBi_meanLoss'
+data_type = 'mtask'
 source = f'predictions/{data_type}/zscore/{model_name}/test/'
 
-print(model_name, metric, treat_name)
+print(model_name, metric, treat_name, task_name)
 
-source_dir = os.path.join('results', model_name, data_type, metric, treat_name)
+source_dir = os.path.join('results', model_name, data_type, task_name, metric, treat_name)
 if not os.path.isdir(source_dir):
     os.makedirs(source_dir)
 
@@ -302,7 +303,16 @@ ind_ai = None
 
 add_feat = np.load(source + 'add_features.npz')['feature']
 for i in range(5):
-    path = source + f'{model_name}_{i}_{metric}_{treat_name}.npz' if treat_name != '' else source + f'{model_name}_{i}_{metric}.npz'
+    if treat_name != '' or task_name != '':
+        if treat_name != '' and task_name != '':
+            ...
+        elif treat_name != '':
+            path = source + f'{model_name}_{i}_{metric}_{treat_name}.npz'
+        else:
+            path = source + f'{model_name}_{i}_{task_name}_{metric}.npz'
+    else:
+        path = source + f'{model_name}_{i}_{metric}.npz'
+        
     predictions = np.load(path)
     target, pred, treat = predictions['target'], predictions['pred'], predictions['treat']
     
@@ -314,13 +324,15 @@ for i in range(5):
         else:
             ind_ai = (treat[:, 0] == 1) & (treat[:, 1] == 1)
             target, pred, treat = target[ind_control | ind_ai], pred[ind_control | ind_ai], treat[:, 0][ind_control | ind_ai]
+    if task_name != '':
+        target = target[:, 0] if task_name == 'login' else target[:, 1]
 
     targets.append(target)
     preds.append(pred)
     treats.append(treat)
     u_at_k += predictions['u_at_k']
+
     if len(np.unique(target)) > 2:
-        print(1)
         qini += qini_auc_score_woNorm(target, pred, treat)
         auuc += uplift_auc_score_woNorm(target, pred, treat)
     else:

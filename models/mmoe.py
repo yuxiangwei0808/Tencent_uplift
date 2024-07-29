@@ -7,7 +7,7 @@ from .abs_mt_arch import AbsArchitecture
 
 
 class MMOE(AbsArchitecture):
-    def __init__(self, encoder_class, num_experts, task_names, enc_kwargs, in_feat, rep_grad, **kwargs):
+    def __init__(self, encoder_class, num_experts, task_names, enc_kwargs, in_feat, rep_grad=False, **kwargs):
         r"""
         a Multi-gate MOE to encoder features
         Args:

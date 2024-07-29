@@ -43,6 +43,8 @@ class ResnetDilated(nn.Module):
                     m.padding = (dilate, dilate)
 
     def forward(self, x):
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
         x = self.relu(self.bn1(self.conv1(x)))
         x = self.maxpool(x)
 
@@ -51,13 +53,3 @@ class ResnetDilated(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         return x
-
-def resnet_dilated(basenet, pretrained=False, dilate_scale=8):
-    r"""Dilated Residual Network models from `"Dilated Residual Networks" <https://openaccess.thecvf.com/content_cvpr_2017/papers/Yu_Dilated_Residual_Networks_CVPR_2017_paper.pdf>`_
-
-    Args:
-        basenet (str): The type of ResNet.
-        pretrained (bool): If True, returns a model pre-trained on ImageNet.
-        dilate_scale ({8, 16}, default=8): The type of dilating process. 
-    """
-    return ResnetDilated(resnet.__dict__[basenet](pretrained=pretrained), dilate_scale=dilate_scale)

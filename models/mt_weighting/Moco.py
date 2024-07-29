@@ -23,8 +23,9 @@ class MoCo(AbsWeighting):
             MoCo is not supported by representation gradients, i.e., ``rep_grad`` must be ``False``.
 
     """
-    def __init__(self):
+    def __init__(self, device=torch.cuda.current_device()):
         super(MoCo, self).__init__()
+        self.device = device
 
     def init_param(self):
         self._compute_grad_dim()

@@ -14,12 +14,24 @@ def mtmt_res_emb_v0_2():
                  t_dim=1, u_dim=128, tu_dim=128)
 
 def mtmt_res_emb_v0_3():
-    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['label_nextday_login'],
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
                  t_dim=1, u_dim=128, tu_dim=512)
 
 def mtmt_res_emb_v0_4():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
                  t_dim=1, u_dim=128, tu_dim=256)
+
+def mtmt_res_emb_v0_4_1(**kwargs):
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
+                 t_dim=1, u_dim=128, tu_dim=256, **kwargs)
+
+def mtmt_res_emb_v0_4_2(**kwargs):
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=4), task_names=['label_nextday_login'],
+                 t_dim=1, u_dim=128, tu_dim=256, **kwargs)
+
+def mtmt_res_emb_v0_4_3(**kwargs):
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=32), task_names=['label_nextday_login'],
+                 t_dim=1, u_dim=128, tu_dim=256, **kwargs)
 
 def mtmt_res_emb_v0_5():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Identity(), task_names=['label_nextday_login'],
@@ -77,7 +89,7 @@ def mtmt_res_mlp_v0():
 
 def mtmt_res_mlp_v0_0():
     user_feat_enc_hidden_dim = 16
-    return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=MLP(in_chans=1, hidden_chans=[16]), task_names=['label_nextday_login'],
+    return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=MLP(in_chans=1, hidden_chans=[16], norm_layer=nn.LayerNorm), task_names=['label_nextday_login'],
                  t_dim=1, u_dim=user_feat_enc_hidden_dim * 8, tu_dim=256)
 
 def mtmt_res_mlp_v0_1():
@@ -222,8 +234,18 @@ def mtmt_mmoe_emb_v0(task_names=['label_nextday_login', 'label_login_days_diff']
 
 def mtmt_mmoe_emb_v1(task_names=['label_nextday_login', 'label_login_days_diff'], num_cls=[1, 1]):
     #[('label_nextday_login', 1), ('label_after7_login_days', 8), ('label_login_days_diff', 13)]
-    return MTMT(user_feat_enc=MMOE(encoder_class=partial(resnet18, drop=0.2), num_experts=4, task_names=task_names, in_feat=626, 
-                            enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None}},
+    return MTMT(user_feat_enc=MMOE(encoder_class=resnet18, num_experts=4, task_names=task_names, in_feat=626, 
+                            enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None, 'drop': 0.2}},
                             rep_grad=False), 
                  treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=task_names,
+                 t_dim=1, u_dim=128, tu_dim=256, num_cls=num_cls)
+
+def mtmt_mmoe_emb_v2(weighting, task_names=['label_nextday_login', 'label_login_days_diff'], num_cls=[1, 1]):
+    class MTLmodel(MMOE, weighting):
+        def __init__(self, **kwargs):
+            super(MTLmodel, self).__init__(**kwargs)
+            self.init_param()
+    enc = MTLmodel(task_names=task_names, encoder_class=resnet18, num_experts=4, rep_grad=False,
+                 in_feat=626, enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None, 'drop': 0.2}})
+    return MTMT(user_feat_enc=enc, treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=task_names,
                  t_dim=1, u_dim=128, tu_dim=256, num_cls=num_cls)

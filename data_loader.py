@@ -114,6 +114,11 @@ def collate_fn(batch, feature_index, treatment_index, task_index, group_discrete
     treatments = batch[:, treatment_index]
     tasks = batch[:, task_index]
 
+    if len(task_index) == 3:  # multi-task, where the second should be loginday_diff
+        # binarize
+        tasks[:, 1][tasks[:, 1] > 0] = 1.
+        tasks[:, 1][tasks[:, 1] <= 0] = 0.
+
     # Convert to tensors
     features_tensor = torch.as_tensor(features, dtype=torch.float32)
     treatments_tensor = torch.as_tensor(treatments, dtype=torch.float32).squeeze()

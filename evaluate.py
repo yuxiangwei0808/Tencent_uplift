@@ -35,9 +35,6 @@ def valid(model, valid_dataloader, device, num_org_feat, reduction):
         else:
             label_list = valid_label.to(device)
 
-        if len(target_task) > 1:
-            label_list = label_list[:, 1]  # use label_login_days_diff only
-
         if 'efin' in args.model_name:
             _, _, _, _, _, uplift = model(feature_list, is_treat)
         elif 'dragonnet' in args.model_name:
@@ -51,7 +48,7 @@ def valid(model, valid_dataloader, device, num_org_feat, reduction):
             raise NotImplementedError
 
         if uplift_s != None:
-            uplift = (uplift + uplift_s * (torch.sigmoid(prps) > 0.5))
+            uplift = uplift + uplift_s * (F.sigmoid(prps) > 0.5)
 
         predictions.extend(uplift.squeeze().detach().cpu())
         true_labels.extend(label_list.squeeze().detach().cpu().numpy())
@@ -67,21 +64,24 @@ def valid(model, valid_dataloader, device, num_org_feat, reduction):
     # pr_auc  = average_precision_score(true_labels, pred_prob)
     predictions = np.array(predictions)
 
-    if len(target_treatment) > 1:
-        u_at_k = metrics_mt(uplift_at_k, true_labels, predictions, is_treatment, reduce=reduction)
-        qini_coef = metrics_mt(qini_auc_score, true_labels, predictions, is_treatment, reduce=reduction)
-        uplift_auc = metrics_mt(uplift_auc_score, true_labels, predictions, is_treatment, reduce=reduction)
-        wau = metrics_mt(weighted_average_uplift, true_labels, predictions, is_treatment, reduce=reduction)
+    if args.mtask:
+        i = 1 if 'diff' in args.ckpt_path[-18:] else 0  # only support for loginday and loginday difference
+        print(i)
+        u_at_k = metrics_mt(uplift_at_k, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
+        qini_coef = metrics_mt(qini_auc_score, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
+        uplift_auc = metrics_mt(uplift_auc_score, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
+        wau = metrics_mt(weighted_average_uplift, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
     else:
-        u_at_k = uplift_at_k(true_labels, predictions, is_treatment, strategy='overall', k=0.3)
-        qini_coef = qini_auc_score(true_labels, predictions, is_treatment)
-        uplift_auc = uplift_auc_score(true_labels, predictions, is_treatment)
-        wau = weighted_average_uplift(true_labels, predictions, is_treatment, strategy='overall')
+        u_at_k = metrics_mt(uplift_at_k, true_labels, predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
+        qini_coef = metrics_mt(qini_auc_score, true_labels, predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
+        uplift_auc = metrics_mt(uplift_auc_score, true_labels, predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
+        wau = metrics_mt(weighted_average_uplift, true_labels, predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
 
-    if isinstance(qini_coef, tuple):
+    if isinstance(qini_coef, tuple):  # multi-treatment / multi-task
         valid_result = [{'QINI': qini, 'AUUC': up, 'WAU': w, 'u_at_k': uk} for qini, up, w, uk in zip(qini_coef, uplift_auc, wau, u_at_k)]
     else:
         valid_result = {'QINI': qini_coef, 'AUUC': uplift_auc, 'WAU': wau, 'u_at_k': u_at_k}
+
     return valid_result, true_labels, predictions, is_treatment, add_features
 
 
@@ -92,7 +92,7 @@ def main(args):
     model, model_kawrgs = get_model(name=args.model_name)
     model = model.to(device)
 
-    # model = torch.compile(model)
+    model = torch.compile(model)
 
     checkpoint = torch.load(args.ckpt_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -111,7 +111,7 @@ def main(args):
     saving_path = args.ckpt_path.split('/')[-1][:-4]
     saving_path = f'predictions/{args.test_data_type}/{args.norm_type}/{args.model_name}/test/{saving_path}'
 
-    if isinstance(valid_metrics, list):
+    if isinstance(valid_metrics, tuple):
         for i in range(len(valid_metrics)):
             save_predictions(true_labels, predictions, treatment, valid_metrics[i], '', saving_path + f'_{treat_names[i]}')
     else:
@@ -125,16 +125,17 @@ if __name__ == '__main__':
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--ckpt_path', type=str)
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
-    parser.add_argument('--model_name', type=str, default='efin')
+    parser.add_argument('--model_name', type=str, default='MTask-mtmt_mmoe_emb_v1_EFIN_l1+0.2l5_diffBi')
     parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'warmtype'], help='all data or a subset of data')
-    parser.add_argument('--test_data_type', type=str, default='full')
+    parser.add_argument('--test_data_type', type=str, default='random')
+    parser.add_argument('--mtask', action='store_true', default=True)
     args = parser.parse_args()
 
     torch.set_float32_matmul_precision('high')
     torch.cuda.set_device(args.local_rank)
     device = torch.device(f'cuda:{args.local_rank}')
     
-    batch_size = 3840 * 8
+    batch_size = 3840 * 16
 
     file_path = [f'data/train_test_data/testdata_240412_240611_{args.norm_type}/dataset_{args.test_data_type}_0.hdf5']
 
@@ -144,8 +145,9 @@ if __name__ == '__main__':
     labels = [x.strip('\n') for x in labels]
     org_feat_idx = [i for i in range(len(labels)) if 'origin' in labels[i]]
     target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround'] if args.data_type == 'warmtype' else ['treatment_next_iswarm']
-    target_task = ['label_nextday_login']
-    # target_task = ['label_nextday_login', 'label_login_days_diff']
+    target_task = ['label_nextday_login'] if not args.mtask else ['label_nextday_login', 'label_login_days_diff']
+    args.data_type = 'mtask' if args.mtask else args.data_type
+    args.test_data_type = 'mtask' if args.mtask else args.test_data_type
     reduction = None
     
     train_dataloader, valid_dataloader = get_data([*file_path], [*file_path], feature_group=None, batch_size=batch_size, addition_feat=org_feat_idx, target_treatment=target_treatment, target_task=target_task)

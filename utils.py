@@ -5,6 +5,7 @@ import os
 from models.efin import EFIN
 from models.dragonnet import DragonNet
 from models.model_hub import *
+from models.mt_weighting import *
 
 
 def check_and_make_dir(path):
@@ -43,8 +44,8 @@ def get_model(name, model_kwargs=None, task_name=None):
         return DragonNet(**model_kwargs), model_kwargs
     elif 'mtmt' in name:
         if model_kwargs is None:
-            model_kwargs = {'name': 'mtmt_res_emb_v0_4_0_EFIN_l1+0.2l5', 't_dim': 1, 'u_dim': 128, 'tu_dim':256}
-        return mtmt_res_emb_v0_4_0(), model_kwargs
+            model_kwargs = {'name': 'mtmt_mmoe_emb_v1', 't_dim': 1, 'u_dim': 128, 'tu_dim':256}
+        return mtmt_mmoe_emb_v1(), model_kwargs
     else:
         raise NotImplementedError
 
