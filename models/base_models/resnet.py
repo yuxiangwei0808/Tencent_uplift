@@ -9,6 +9,7 @@ except:
 from timm.layers import DropPath
 
 from .disc_encoder import DiscEncoder
+from .resnet_dilated import ResnetDilated
 
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
@@ -102,7 +103,7 @@ class Bottleneck(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
-        self.drop_out = nn.DropPath(drop) if drop > 0 else nn.Identity()
+        self.drop_out = nn.Dropout(drop) if drop > 0 else nn.Identity()
 
     def forward(self, x):
         identity = x
@@ -232,8 +233,8 @@ class ResNet(nn.Module):
 
 
 class ResNetHeavy(nn.Module):
-    def __init__(self, block, layers, hidden_dim, out_dim, in_ch=1, num_classes=1000, zero_init_residual=False,
-                 groups=1, width_per_group=64, replace_stride_with_dilation=None,
+    def __init__(self, block, layers, hidden_dim, out_dim=None, in_ch=1, num_classes=1000, zero_init_residual=False,
+                 groups=1, drop=0., width_per_group=64, replace_stride_with_dilation=None,
                  norm_layer=None):
         super().__init__()
         if norm_layer is None:
@@ -256,15 +257,15 @@ class ResNetHeavy(nn.Module):
         self.bn1 = norm_layer(self.inplanes)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool1d(kernel_size=2, stride=2)
-        self.layer1 = self._make_layer(block, hidden_dim, layers[0])
+        self.layer1 = self._make_layer(block, hidden_dim, layers[0], drop=drop)
         self.layer2 = self._make_layer(block, hidden_dim * 2, layers[1], stride=2,
-                                       dilate=replace_stride_with_dilation[0])
+                                       dilate=replace_stride_with_dilation[0], drop=drop)
         self.layer3 = self._make_layer(block, hidden_dim * 4, layers[2], stride=2,
-                                       dilate=replace_stride_with_dilation[1])
+                                       dilate=replace_stride_with_dilation[1], drop=drop)
         self.layer4 = self._make_layer(block, hidden_dim * 8, layers[3], stride=2,
-                                       dilate=replace_stride_with_dilation[2])
+                                       dilate=replace_stride_with_dilation[2], drop=drop)
         self.avgpool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.Linear(39, out_dim)
+        self.fc = nn.Linear(39, out_dim) if out_dim != None else nn.Identity()
         # self.fc = nn.Linear(1, out_dim)  # criteo 12 feature input
         self.feature_dim = 512 * block.expansion
         for m in self.modules():
@@ -284,7 +285,7 @@ class ResNetHeavy(nn.Module):
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
 
-    def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
+    def _make_layer(self, block, planes, blocks, stride=1, dilate=False, drop=0.):
         norm_layer = self._norm_layer
         downsample = None
         previous_dilation = self.dilation
@@ -299,12 +300,12 @@ class ResNetHeavy(nn.Module):
 
         layers = []
         layers.append(block(self.inplanes, planes, stride, downsample, self.groups,
-                            self.base_width, previous_dilation, norm_layer))
+                            self.base_width, previous_dilation, norm_layer, drop=drop))
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
             layers.append(block(self.inplanes, planes, groups=self.groups,
                                 base_width=self.base_width, dilation=self.dilation,
-                                norm_layer=norm_layer))
+                                norm_layer=norm_layer, drop=drop))
 
         return nn.Sequential(*layers)
 

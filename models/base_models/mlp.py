@@ -17,13 +17,14 @@ class MLP(nn.Module):
             if x.dim() == 2:
                 assert self.transpose, "when input dim=2, emb shape is B C N, expect transpose"
             x = self.encoder(x.to(torch.long))
-        x = x.permute(0, 2, 1) if self.transpose else x
+        x = x.permute(0, 2, 1) if self.transpose and x.dim() > 2 else x
         
         if x.dim() == 2:
             x = x.unsqueeze(-1)  # B N C
-        
+            self.transpose = True
+
         x = self.mlp(x)
-        x = x.permute(0, 2, 1) if self.transpose else x
+        x = x.permute(0, 2, 1) if self.transpose and x.dim() > 2 else x
         return x
     
     

@@ -1,3 +1,4 @@
+from functools import partial
 from .mtmt import *
 
 def mtmt_res_emb_v0():
@@ -13,20 +14,24 @@ def mtmt_res_emb_v0_2():
                  t_dim=1, u_dim=128, tu_dim=128)
 
 def mtmt_res_emb_v0_3():
-    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['label_nextday_login'],
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
                  t_dim=1, u_dim=128, tu_dim=512)
 
 def mtmt_res_emb_v0_4():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
                  t_dim=1, u_dim=128, tu_dim=256)
 
-def mtmt_res_emb_v0_4_0():
-    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
-                 t_dim=1, u_dim=128, tu_dim=256)
+def mtmt_res_emb_v0_4_1(**kwargs):
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
+                 t_dim=1, u_dim=128, tu_dim=256, **kwargs)
 
-def mtmt_res_emb_v0_4_1():
-    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
-                 t_dim=16, u_dim=128, tu_dim=256)
+def mtmt_res_emb_v0_4_2(**kwargs):
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=4), task_names=['label_nextday_login'],
+                 t_dim=1, u_dim=128, tu_dim=256, **kwargs)
+
+def mtmt_res_emb_v0_4_3(**kwargs):
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=32), task_names=['label_nextday_login'],
+                 t_dim=1, u_dim=128, tu_dim=256, **kwargs)
 
 def mtmt_res_emb_v0_5():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=38), treat_feat_enc=nn.Identity(), task_names=['label_nextday_login'],
@@ -59,7 +64,7 @@ def mtmt_res_emb_v0_normEnhance():
 
 def mtmt_res_emb_v1():
     user_feat_enc_hidden_dim = 64
-    return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['label_nextday_login'],
+    return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
                  t_dim=1, u_dim=user_feat_enc_hidden_dim * 8, tu_dim=256)
 
 def mtmt_res_emb_v1_0():
@@ -69,8 +74,8 @@ def mtmt_res_emb_v1_0():
 
 def mtmt_res_emb_v2():
     user_feat_enc_hidden_dim = 64
-    return MTMT(user_feat_enc=resnet50(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=nn.Embedding(num_embeddings=10, embedding_dim=16), task_names=['label_nextday_login'],
-                 t_dim=1, u_dim=user_feat_enc_hidden_dim * 32, tu_dim=256)
+    return MTMT(user_feat_enc=resnet50(hidden_dim=user_feat_enc_hidden_dim, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
+                 t_dim=1, u_dim=user_feat_enc_hidden_dim * 8, tu_dim=256)
 
 def mtmt_res_emb_v2_0():
     user_feat_enc_hidden_dim = 8
@@ -84,7 +89,7 @@ def mtmt_res_mlp_v0():
 
 def mtmt_res_mlp_v0_0():
     user_feat_enc_hidden_dim = 16
-    return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=MLP(in_chans=1, hidden_chans=[16]), task_names=['label_nextday_login'],
+    return MTMT(user_feat_enc=resnet18(hidden_dim=user_feat_enc_hidden_dim, out_dim=128), treat_feat_enc=MLP(in_chans=1, hidden_chans=[16], norm_layer=nn.LayerNorm), task_names=['label_nextday_login'],
                  t_dim=1, u_dim=user_feat_enc_hidden_dim * 8, tu_dim=256)
 
 def mtmt_res_mlp_v0_1():
@@ -101,16 +106,8 @@ def mtmt_cnn_emb_v1():
                  t_dim=1, u_dim=128, tu_dim=256)
 
 def mtmt_vit_emb_v0():
-    return MTMT(user_feat_enc=vit_tiny_patch2_224(img_size=622, in_chans=1), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
+    return MTMT(user_feat_enc=vit_tiny_patch2_224(img_size=629, in_chans=1), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
                  t_dim=1, u_dim=192, tu_dim=256)
-
-def mtmt_mmoe_emb_v0(task_names=['label_nextday_login', 'label_login_days_diff'], num_cls=[1, 1]):
-    #[('label_nextday_login', 1), ('label_after7_login_days', 8), ('label_login_days_diff', 13)]
-    return MTMT(user_feat_enc=MMOE(encoder_class=resnet18, num_experts=4, task_names=task_names, in_feat=629, 
-                            enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None}},
-                            rep_grad=False), 
-                 treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=task_names,
-                 t_dim=1, u_dim=128, tu_dim=256, num_cls=num_cls)
 
 def mtmt_res_cnn_emb_v0():
     # seperately process discrete feature; zero-encode and pad the discrete feature
@@ -145,7 +142,7 @@ def mtmt_res_disc_mlp__emb_v0():
 def mtmt_res_disc_mlp__emb_v0_1():
     return  MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=16, drop=0.2), 
                     DiscEncoder(embed_dim=8, out_shape='2d',
-                                enc=MLP(hidden_chans=[16, 64, 128], in_chans=9, transpose=True, norm_layer=nn.LayerNorm))
+                                enc=MLP(hidden_chans=[16, 64, 128], in_chans=10, transpose=True, norm_layer=nn.LayerNorm))
                 ]), 
                 treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16),
                 task_names=['label_nextday_login'],
@@ -201,10 +198,54 @@ def mtmt_res__emb_MLP_v0_4_0():
 
 def mtmt_res__emb_MLP_v0_4_1():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), 
-                treat_feat_enc=MLP(in_chans=1, transpose=True, hidden_chans=[16], drop_rate=0.1, encoder=nn.Embedding(num_embeddings=2, embedding_dim=8)),
+                treat_feat_enc=MLP(in_chans=1, hidden_chans=[16], drop_rate=0.1, norm_layer=None, encoder=nn.Embedding(num_embeddings=2, embedding_dim=8)),
                 task_names=['label_nextday_login'], t_dim=16, u_dim=128, tu_dim=256)
 
 def mtmt_res__emb_cnn_v0_4_0():
     return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), 
                 treat_feat_enc=cnn_simple(in_chans=1, hidden_chans=[4, 8, 16], strides=[1, 1, 1], encoder=nn.Embedding(num_embeddings=2, embedding_dim=8)),
                 task_names=['label_nextday_login'], t_dim=16, u_dim=128, tu_dim=256)
+
+def mtmt_res_disc_mlp__emb_MLP_v0():
+    return  MTMT(user_feat_enc=nn.ModuleList([resnet18(hidden_dim=16, drop=0.2), 
+                    DiscEncoder(embed_dim=8, out_shape='2d',
+                                enc=MLP(hidden_chans=[16, 64, 128], in_chans=9, transpose=True, norm_layer=nn.LayerNorm))
+                ]), 
+                treat_feat_enc=MLP(in_chans=1, hidden_chans=[16], drop_rate=0.1, norm_layer=None, encoder=nn.Embedding(num_embeddings=2, embedding_dim=8)),
+                task_names=['label_nextday_login'],
+                t_dim=16, u_dim=128, tu_dim=256)
+
+def mtmt_res_emb_v0_4_0(**kwargs):
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2), treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=['label_nextday_login'],
+                 t_dim=1, u_dim=128, tu_dim=256, **kwargs)
+
+def mtmt_res_emb_v0_4_0_mtreat(**kwargs):
+    return MTMT(user_feat_enc=resnet18(hidden_dim=16, out_dim=None, drop=0.2),
+                 treat_feat_enc=nn.Embedding(num_embeddings=3, embedding_dim=16), treat_feat_enc_s=nn.Embedding(num_embeddings=3, embedding_dim=16),
+                 task_names=['label_nextday_login'], t_dim=1, u_dim=128, tu_dim=256, process_treats=True, **kwargs)
+
+def mtmt_mmoe_emb_v0(task_names=['label_nextday_login', 'label_login_days_diff'], num_cls=[1, 1]):
+    #[('label_nextday_login', 1), ('label_after7_login_days', 8), ('label_login_days_diff', 13)]
+    return MTMT(user_feat_enc=MMOE(encoder_class=resnet18, num_experts=4, task_names=task_names, in_feat=626, 
+                            enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None}},
+                            rep_grad=False), 
+                 treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=task_names,
+                 t_dim=1, u_dim=128, tu_dim=256, num_cls=num_cls)
+
+def mtmt_mmoe_emb_v1(task_names=['label_nextday_login', 'label_login_days_diff'], num_cls=[1, 1]):
+    #[('label_nextday_login', 1), ('label_after7_login_days', 8), ('label_login_days_diff', 13)]
+    return MTMT(user_feat_enc=MMOE(encoder_class=resnet18, num_experts=4, task_names=task_names, in_feat=626, 
+                            enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None, 'drop': 0.2}},
+                            rep_grad=False), 
+                 treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=task_names,
+                 t_dim=1, u_dim=128, tu_dim=256, num_cls=num_cls)
+
+def mtmt_mmoe_emb_v2(weighting, task_names=['label_nextday_login', 'label_login_days_diff'], num_cls=[1, 1]):
+    class MTLmodel(MMOE, weighting):
+        def __init__(self, **kwargs):
+            super(MTLmodel, self).__init__(**kwargs)
+            self.init_param()
+    enc = MTLmodel(task_names=task_names, encoder_class=resnet18, num_experts=4, rep_grad=False,
+                 in_feat=626, enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None, 'drop': 0.2}})
+    return MTMT(user_feat_enc=enc, treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=task_names,
+                 t_dim=1, u_dim=128, tu_dim=256, num_cls=num_cls)

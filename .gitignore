@@ -4,7 +4,7 @@ experiments/
 tmp/
 legacy/
 __pycache__/
-rotary_embedding_torch/
+results/
 *.png
 *.sh
 test.py
