@@ -11,3 +11,4 @@ except TypeError:
     ...
 from .s_learner import SLearner
 from .t_learner import TLearner
+from .m3tn import M3TN

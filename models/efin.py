@@ -90,7 +90,7 @@ class EFIN(nn.Module):
         return outputs, attention
 
     def forward(self, feature_list, is_treat):
-        t_true = is_treat.unsqueeze(1)  # B, 1
+        t_true = is_treat.unsqueeze(1)  if is_treat.dim() == 1 else t_true
         # hu_dim looks like channel
         x_rep = feature_list.unsqueeze(2) * self.x_rep.weight.unsqueeze(0)  # B, N, 1 * 1, N, hu_dim -> B, N, hu_dim
 
@@ -119,7 +119,7 @@ class EFIN(nn.Module):
         c_logit, c_prob, c_tau, t_logit, t_prob, u_tau = self.forward(feature_list, is_treat)
 
         y_true = label_list.unsqueeze(1)
-        t_true = is_treat.unsqueeze(1)
+        t_true = is_treat.unsqueeze(1) if t_true.dim() == 1 else is_treat[:, :1]
 
         c_logit_fix = c_logit.detach()
         uc = c_logit

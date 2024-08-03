@@ -1,116 +1,171 @@
-import torch
 import numpy as np
+import torch
 import torch.nn as nn
-from torch.distributions.dirichlet import Dirichlet
+import torch.nn.functional as F
 
-
-class BatchNormWeighted(nn.BatchNorm2d):
-    def __init__(self, num_features, wts):
-        super(BatchNormWeighted, self).__init__(num_features)
-        self.wts = wts
-
-    def forward(self, x):
-        self._check_input_dim(x)
-        self.wts = self.wts.cuda(x.device)
-        flat_x = x.view(x.size(0), -1)
-        weighted_x = (flat_x * self.wts[:flat_x.shape[0], None]) / self.wts[:flat_x.shape[0]].sum()
-        weighted_x = weighted_x.view(x.shape).permute(1, 0, 2, 3).contiguous().view(x.size(1), -1)
-        y = x.permute(1, 0, 2, 3).contiguous().view(x.size(1), -1)
-        
-        mu = weighted_x.mean(dim=1)
-        sigma2 = weighted_x.var(dim=1)
-        
-        if self.training:
-            if self.track_running_stats:
-                with torch.no_grad():
-                    self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * mu
-                    self.running_var = (1 - self.momentum) * self.running_var + self.momentum * sigma2
-            y = (y - mu.view(-1, 1)) / (sigma2.view(-1, 1).sqrt() + self.eps)
-        else:
-            y = (y - self.running_mean.view(-1, 1)) / (self.running_var.view(-1, 1).sqrt() + self.eps)
-        
-        y = self.weight.view(-1, 1) * y + self.bias.view(-1, 1)
-        return y.view_as(x).permute(1, 0, 2, 3)
-
-
-def makeBNWeighted(net_, wts):
-    for name, child in net_.named_children():
-        if isinstance(child, nn.BatchNorm2d):
-            setattr(net_, name, BatchNormWeighted(child.num_features, wts=wts))
-        makeBNWeighted(child, wts)
-
-
-class Uncoiler(nn.Module):
-    def __init__(self, net_):
-        super(Uncoiler, self).__init__()
-        mod_dict = self.get_module_dict(net_)
-        for key, module in mod_dict.items():
-            self.add_module(key, module)
-
-    def get_module_dict(self, net_):
-        mod_dict = {}
-        for name, child in net_.named_children():
-            if len(list(child.children())) == 0 or 'trans' in name:
-                mod_dict[name] = child
-            else:
-                for name1, child1 in child.named_children():
-                    mod_dict[f"{name}_{name1}"] = child1
-        return mod_dict
-
-    def forward(self, x):
-        for i, mod in enumerate(self.children(), 1):
-            x = mod(x)
-            if i == len(list(self.children())):
-                x = torch.nn.functional.avg_pool2d(x, x.size()[3])
-                x = x.view(x.size(0), -1)
-        return x
-
-
-class Flatten(nn.Module):
-    def forward(self, x):
-        return x.view(x.size(0), -1)
+from typing import Tuple
 
 
 class HydraNet(nn.Module):
-    def __init__(self, model, n_heads=1, split_pt=7, num_classes=10, batch_size=128, sample_wts=None, path=None):
+    def __init__(self, input_dim: int, is_regularized: bool, shared_hidden: int = 512, outcome_hidden: int = 256, num_treats=1):
         super(HydraNet, self).__init__()
-        self.n_heads = n_heads
-        self.split_pt = split_pt
+        self.is_regularized = is_regularized
+        self.num_treats = num_treats
+        self.shared_layers = nn.Sequential(
+            nn.Linear(input_dim, shared_hidden),
+            nn.ReLU(),
+            nn.Linear(shared_hidden, shared_hidden),
+            nn.ReLU(),
+            nn.Linear(shared_hidden, shared_hidden),
+            nn.ReLU()
+        )
 
-        if sample_wts is None:
-            sample_wts = [Dirichlet(torch.ones(batch_size)).sample().float().cuda() for _ in range(n_heads)]
-        self.sample_wts = sample_wts
-      
-    
-        model_body = self.model_maker(model, num_classes)
-        if path:
-            model_body.load_state_dict(torch.load(path)['state_dict'])
-        
-        model_body = Uncoiler(model_body)
-        model_body = Uncoiler(model_body)
-        self.layer_1 = nn.Sequential(*list(model_body.children())[:split_pt])
-        
-        self.layer_2 = nn.ModuleList()
-        for i in range(self.n_heads):
-            model_head = self.model_maker(model, num_classes)
-            model_head = Uncoiler(model_head)
-            model_head = Uncoiler(model_head)
-            makeBNWeighted(model_head, self.sample_wts[i])
-            modules = list(model_head.children())[split_pt:-1]
-            self.layer_2.append(nn.Sequential(*modules, Flatten(), list(model_head.children())[-1]))
+        self.treat_out = nn.Linear(shared_hidden, 1)
 
-    def model_maker(self, model, num_classes):
-        if model == "resnet":
-            model_ = eval(model)(depth=110, num_classes=num_classes).cuda()
-        elif model == "preresnet":
-            model_ = eval(model)(depth=110, num_classes=num_classes).cuda()
-        elif model == "densenet":
-            model_ = eval(model)(depth=100, num_classes=num_classes, growthRate=12).cuda()
+        self.y0_layers = self._make_outcome_layers(shared_hidden, outcome_hidden)
+        self.yt_layers = nn.ModuleList([self._make_outcome_layers(shared_hidden, outcome_hidden) for _ in range(num_treats)])
+
+        self.epsilon = nn.Linear(1, 1)
+        torch.nn.init.xavier_normal_(self.epsilon.weight)
+
+    def _make_outcome_layers(self, shared_hidden: int, outcome_hidden: int) -> nn.Sequential:
+        return nn.Sequential(
+            nn.Linear(shared_hidden, outcome_hidden),
+            nn.ReLU(),
+            nn.Linear(outcome_hidden, outcome_hidden),
+            nn.ReLU(),
+            nn.Linear(outcome_hidden, 1)
+        )
+
+    def forward(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Forward method to train model.
+
+        Parameters
+        ----------
+        inputs: torch.Tensor
+            covariates
+
+        Returns
+        -------
+        y0: torch.Tensor
+            outcome under control
+        y1: torch.Tensor
+            outcome under treatment
+        t_pred: torch.Tensor
+            predicted treatment
+        eps: torch.Tensor
+            trainable epsilon parameter
+        """
+        z = self.shared_layers(inputs)
+        t_pred = torch.sigmoid(self.treat_out(z))
+
+        y0 = self.y0_layers(z)
+        yt = [self.yt_layers[i](z) for i in range(self.num_treats)]
+
+        eps = self.epsilon(torch.ones_like(t_pred)[:, 0:1])
+
+        return y0, yt, t_pred, eps
+
+    def calculate_loss(self, inputs: torch.Tensor, t_true: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+        y0, yt, t_pred, eps = self.forward(inputs)
+        if t_true.dim() > 1 and t_true.shape[1] > 1:
+            idx_ctrl, idx_5ai, idx_9ai = (t_true[:, 0] == 0), (t_true[:, 0] == 1) & (t_true[:, 1] == 0), (t_true[:, 1] == 1)
+            if self.is_regularized:
+                loss = tarreg_loss(y_true[idx_ctrl | idx_5ai], t_true[:, 0][idx_ctrl | idx_5ai], t_pred[idx_ctrl | idx_5ai], y0[idx_ctrl | idx_5ai], yt[0][idx_ctrl | idx_5ai])
+                loss += tarreg_loss(y_true[idx_ctrl | idx_9ai], t_true[:, 1][idx_ctrl | idx_9ai], t_pred[idx_ctrl | idx_9ai], y0[idx_ctrl | idx_9ai], yt[1][idx_ctrl | idx_9ai])
+            else:
+                loss = dragonnet_loss(y_true[idx_ctrl | idx_5ai], t_true[:, 0][idx_ctrl | idx_5ai], t_pred[idx_ctrl | idx_5ai], y0[idx_ctrl | idx_5ai], yt[0][idx_ctrl | idx_5ai])
+                loss += dragonnet_loss(y_true[idx_ctrl | idx_9ai], t_true[:, 1][idx_ctrl | idx_9ai], t_pred[idx_ctrl | idx_9ai], y0[idx_ctrl | idx_9ai], yt[1][idx_ctrl | idx_9ai])
         else:
-            raise ValueError("Unrecognized model name given")
-        return model_
+            if self.is_regularized:
+                loss = tarreg_loss(y_true, t_true, t_pred, y0, yt[0], eps)
+            else:
+                loss = dragonnet_loss(y_true, t_true, t_pred, y0, yt[0])
+            
+        return loss
+    
 
-    def forward(self, x):
-        x = self.layer_1(x)
-        outputs = [head(x) for head in self.layer_2]
-        return outputs 
+def dragonnet_loss(y_true, t_true, t_pred, y0_pred, y1_pred, alpha=1.0):
+    """
+    Generic loss function for dragonnet
+
+    Parameters
+    ----------
+    y_true: torch.Tensor
+        Actual target variable
+    t_true: torch.Tensor
+        Actual treatment variable
+    t_pred: torch.Tensor
+        Predicted treatment
+    y0_pred: torch.Tensor
+        Predicted target variable under control
+    y1_pred: torch.Tensor
+        Predicted target variable under treatment
+    alpha: float
+        loss component weighting hyperparameter between 0 and 1
+    Returns
+    -------
+    loss: torch.Tensor
+    """
+    t_pred = (t_pred + 0.01) / 1.02
+    loss_t = F.binary_cross_entropy(t_pred.squeeze(), t_true).sum()
+
+    loss0 = ((1. - t_true) * (y_true - y0_pred).pow(2)).sum()
+    loss1 = (t_true * (y_true - y1_pred).pow(2)).sum()
+    loss_y = loss0 + loss1
+
+    loss = loss_y + alpha * loss_t
+
+    return loss
+
+
+def tarreg_loss(y_true, t_true, t_pred, y0_pred, y1_pred, eps, alpha=1.0, beta=1.0):
+    """
+    Targeted regularisation loss function for dragonnet
+
+    Parameters
+    ----------
+    y_true: torch.Tensor
+        Actual target variable
+    t_true: torch.Tensor
+        Actual treatment variable
+    t_pred: torch.Tensor
+        Predicted treatment
+    y0_pred: torch.Tensor
+        Predicted target variable under control
+    y1_pred: torch.Tensor
+        Predicted target variable under treatment
+    eps: torch.Tensor
+        Trainable epsilon parameter
+    alpha: float
+        loss component weighting hyperparameter between 0 and 1
+    beta: float
+        targeted regularization hyperparameter between 0 and 1
+    Returns
+    -------
+    loss: torch.Tensor
+    """
+    vanilla_loss = dragonnet_loss(y_true, t_true, t_pred, y0_pred, y1_pred, alpha)
+    t_pred = (t_pred + 0.01) / 1.02
+
+    y_pred = t_true * y1_pred + (1 - t_true) * y0_pred
+
+    h = (t_true / t_pred) - ((1 - t_true) / (1 - t_pred))
+
+    y_pert = y_pred + eps * h
+    targeted_regularization = ((y_true - y_pert) ** 2).sum()
+
+    # final loss
+    loss = vanilla_loss + beta * targeted_regularization
+    return loss
+
+
+if __name__ == '__main__':
+    feat = torch.randn(16, 622)
+    t = torch.randint(0, 2, (16, 2), dtype=torch.float)
+    y = torch.ones(16)
+    
+    model = HydraNet(input_dim=622, num_treats=2, is_regularized=False) 
+    print(model(feat))
+    print(model.calculate_loss(feat, t, y ))
