@@ -90,7 +90,7 @@ class EFIN(nn.Module):
         return outputs, attention
 
     def forward(self, feature_list, is_treat):
-        t_true = is_treat.unsqueeze(1)  # B, 1
+        t_true = is_treat.unsqueeze(1) if is_treat.dim() == 1 else is_treat # B, 1
         # hu_dim looks like channel
         x_rep = feature_list.unsqueeze(2) * self.x_rep.weight.unsqueeze(0)  # B, N, 1 * 1, N, hu_dim -> B, N, hu_dim
 
@@ -118,18 +118,14 @@ class EFIN(nn.Module):
     def calculate_loss(self, feature_list, is_treat, label_list):
         c_logit, c_prob, c_tau, t_logit, t_prob, u_tau = self.forward(feature_list, is_treat)
 
-        y_true = label_list.unsqueeze(1)
-        t_true = is_treat.unsqueeze(1)
+        y_true = label_list.unsqueeze(1) if label_list.dim() != 1 else label_list
+        t_true = is_treat.unsqueeze(1) if is_treat.dim() == 1 else is_treat[:, :1]
 
         c_logit_fix = c_logit.detach()
         uc = c_logit
         ut = c_logit_fix + u_tau
 
-        loss1 = F.mse_loss(uc + t_true * ut, y_true)
+        loss1 = F.mse_loss((uc + t_true * ut).squeeze(), y_true.squeeze())
         loss2 = F.binary_cross_entropy_with_logits(t_logit, 1 - t_true)
         loss = loss1 + loss2
-        # loss_estr = F.binary_cross_entropy_with_logits(ut, y_true * t_true)
-        # loss_escr = F.binary_cross_entropy_with_logits(uc, y_true * (1 - t_true))
-        # loss_pspy = F.binary_cross_entropy_with_logits(t_logit, t_true)
-
         return loss

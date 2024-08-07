@@ -21,7 +21,7 @@ class MultiHeadAttn(nn.Module):
         
         self._init_weights()
 
-    def forward(self, q, k, v):
+    def forward(self, q, k, v, return_weight=False):
         Q, K, V = self.Q_w(q), self.K_w(k), self.V_w(v)
 
         if self.num_head > 1:
@@ -30,7 +30,6 @@ class MultiHeadAttn(nn.Module):
             V = rearrange(V, 'b n (h ch) -> b h n ch', h=self.num_head, ch=self.embed_dim // self.num_head)
 
         attn_weights = torch.matmul(Q, K.transpose(-2, -1)) / (K.shape[-1] ** 0.5)
-        # TODO use sparse activation
         attn_weights = self.act(attn_weights)
         attn_weights = self.attn_drop(attn_weights)
         outputs = torch.matmul(attn_weights, V)
@@ -38,7 +37,9 @@ class MultiHeadAttn(nn.Module):
         if self.num_head > 1:
             outputs = rearrange(outputs, 'b h n ch -> b n (h ch)')
 
-        return outputs, attn_weights
+        if return_weight:
+            return outputs, attn_weights
+        return outputs
 
     def _init_weights(self):
         xavier_uniform_(self.Q_w.weight)

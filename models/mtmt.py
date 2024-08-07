@@ -86,26 +86,18 @@ class MTMT(nn.Module):
         self.process_treats = process_treats
         self.u_tau = nn.ModuleDict({name: ClsHead(u_dim, nc) for name, nc in zip(task_names, num_cls)})  # assume tasks are all binary or regression
 
-        u_dim *= len(self.task_names)  # since we cat the output of different tasks
+        # u_dim *= len(self.task_names)  # since we cat the output of different tasks
         
-        self.Q_w = nn.Linear(t_dim, tu_dim, bias=True)
-        self.K_w = nn.Linear(u_dim, tu_dim, bias=True)
-        self.V_w = nn.Linear(u_dim, tu_dim, bias=True)
-        self.softmax = nn.Softmax(dim=-1)
+        self.self_attention = nn.ModuleDict({name: MultiHeadAttn(embed_dim=tu_dim, qdim=t_dim, kdim=u_dim, vdim=u_dim, num_head=4, attn_drop=0.2) for name in task_names})
         
-        self.self_attention = MultiHeadAttn(embed_dim=tu_dim, qdim=t_dim, kdim=u_dim, vdim=u_dim, num_head=4, attn_drop=0.2)
+        self.tu_enhance = nn.ModuleDict({name: Mlp(tu_dim, hidden_features=tu_dim // 2, norm_layer=tu_enhance_norm) for name in task_names})
         
-        self.tu_enhance = Mlp(tu_dim, hidden_features=tu_dim // 2, norm_layer=tu_enhance_norm)
-        
-        self.tu_logit = ClsHead(tu_dim, 1)
-        self.tu_tau   = ClsHead(tu_dim, 1)
+        self.tu_logit = nn.ModuleDict({name: ClsHead(tu_dim, 1) for name in task_names})
 
         if treat_feat_enc_s is not None:
-            self.self_attention_s = MultiHeadAttn(embed_dim=tu_dim, qdim=t_dim, kdim=u_dim, vdim=u_dim, num_head=4, attn_drop=0.2)
-            self.tu_enhance_s = nn.Sequential(
-                Mlp(tu_dim, hidden_features=tu_dim // 2, norm_layer=tu_enhance_norm),
-            )
-            self.tu_logit_s = ClsHead(tu_dim, 1)
+            self.self_attention_s = nn.ModuleDict({name: MultiHeadAttn(embed_dim=tu_dim, qdim=t_dim, kdim=u_dim, vdim=u_dim, num_head=4, attn_drop=0.2) for name in task_names})
+            self.tu_enhance_s = nn.ModuleDict({name: Mlp(tu_dim, hidden_features=tu_dim // 2, norm_layer=tu_enhance_norm) for name in task_names})
+            self.tu_logit_s = nn.ModuleDict({name: ClsHead(tu_dim, 1) for name in task_names})
 
     def forward(self, user_input, treat=None, treat_s=None):
         if self.combined_input:  # combine treat into user_input
@@ -141,56 +133,52 @@ class MTMT(nn.Module):
 
         u_logit = {task: self.u_tau[task](user_feat[task]).squeeze() for task in self.task_names}
                 
-        # TODO try add or weighted add (linear) insteand of cat
-        # TODO maybe we need to calculate a tu_logit for each task
-        user_feat_cat = torch.cat([t for t in user_feat.values()], dim=1)  # B C N
-        user_feat_norm  = user_feat_cat / (torch.linalg.norm(user_feat_cat, dim=1, keepdim=True) + 1e-6)
+        user_feat_norm = {name: t / (torch.linalg.norm(t, dim=1, keepdim=True) + 1e-6) for name, t in user_feat.items()}
 
         treat_feat = treat_feat.unsqueeze(-1) if treat_feat.dim() == 2 else treat_feat.transpose(-1, -2)  # B N C, C = 1
         treat_feat_norm = treat_feat / (torch.linalg.norm(treat_feat, dim=-1, keepdim=True) + 1e-6)
 
-        tu_feat, _ = self.self_attention(treat_feat_norm, user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))
+        tu_feat = {name: self.self_attention[name](treat_feat_norm, user_feat_norm[name].transpose(-1, -2), user_feat_norm[name].transpose(-1, -2)) for name in self.task_names}
 
         # enhance treatment-user feature
-        tu_feat_enhanced = self.tu_enhance(tu_feat).transpose(-1, -2)  # B C N
-        
+        # tu_feat_enhanced = self.tu_enhance(tu_feat).transpose(-1, -2)  # B C N
+        tu_feat_enhanced = {name: self.tu_enhance[name](tu_feat[name]).transpose(-1, -2) for name in self.task_names}
+
         # regularizer
-        tu_tau = self.tu_tau(tu_feat_enhanced).squeeze()
-        tu_logit = self.tu_logit(tu_feat_enhanced).squeeze()
+        tu_logit = {name: self.tu_logit[name](tu_feat_enhanced[name]).squeeze() for name in self.task_names}
         tu_logit_s = None
 
         if treat_s is not None:
             # more specific treatments
             treat_feat_s = treat_feat_s.unsqueeze(-1) if treat_feat_s.dim() == 2 else treat_feat_s.transpose(-1, -2)  # B N C, C = 1
             treat_feat_s_norm = treat_feat_s / (torch.linalg.norm(treat_feat_s, dim=-1, keepdim=True) + 1e-6)
-            tu_feat_s, _ = self.self_attention_s(treat_feat_s_norm, user_feat_norm.transpose(-1, -2), user_feat_norm.transpose(-1, -2))
-            tu_feat_enhanced_s = self.tu_enhance_s(tu_feat_s).transpose(-1, -2)
+            tu_feat_s = {name: self.self_attention_s[name](treat_feat_s_norm, user_feat_norm[name].transpose(-1, -2), user_feat_norm[name].transpose(-1, -2)) for name in self.task_names}
 
-            tu_logit_s = self.tu_logit_s(tu_feat_enhanced_s).squeeze()
+            tu_feat_enhanced_s = {name: self.tu_enhance_s[name](tu_feat_s[name]).transpose(-1, -2) for name in self.task_names}
+
+            tu_logit_s = {name: self.tu_logit_s[name](tu_feat_enhanced_s[name]).squeeze() for name in self.task_names}
 
         if self.log_tensors:
-            return u_logit, tu_tau, tu_logit, tu_logit_s, tu_feat
+            return u_logit, None, tu_logit, tu_logit_s, tu_feat_enhanced, tu_feat_enhanced_s
         if self.combined_output:
             return u_logit['label_nextday_login'] * (1 - treat) + (tu_logit + u_logit['label_nextday_login'].detach()) * treat
 
-        return u_logit, tu_tau, tu_logit, tu_logit_s
+        return u_logit, None, tu_logit, tu_logit_s
         
     def calculate_loss(self, user_input, treat, y_true, target_task, reduction='sum'):
-        # TODO try different weight balancing for MTL
-        # TODO multi-treatment        
         u_logit, tu_tau, tu_logit, tu_logit_s = self.forward(user_input, treat)
-        
-        # tu_logit += u_logit['nextday_login'].detach()  # EFIN
-        # tu_logit_s += u_logit['nextday_login'].detach()
         
         """For multi-task, there are two design choices: treat each task as regression and use mse, or treat each task as classification and use bce and projects label to 0-n"""
         if treat.dim() == 1:  # single treatment
             if reduction == 'sum':
-                loss1 = sum([F.mse_loss((1 - treat) * u_logit[t].squeeze() + treat * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)])  # binary
+                loss1 = sum([F.mse_loss((1 - treat) * u_logit[t].squeeze() + treat * (tu_logit[t] + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)])  # binary
             elif reduction == 'mean':
-                loss1 = sum([F.mse_loss((1 - treat) * u_logit[t].squeeze() + treat * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)]) / len(target_task) # binary
+                loss1 = sum([F.mse_loss((1 - treat) * u_logit[t].squeeze() + treat * (tu_logit[t] + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)]) / len(target_task) # binary
             elif reduction == 'none':
-                loss1 = [F.mse_loss((1 - treat) * u_logit[t].squeeze() + treat * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)]
+                loss1_raw = [F.mse_loss((1 - treat) * u_logit[t].squeeze() + treat * (tu_logit[t] + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)]
+                loss1 = torch.zeros(len(target_task), device=user_input.device)
+                for i in range(len(loss1_raw)):
+                    loss1[i] = loss1_raw[i]
         else:
             # Control * y0 + Treatment * (y0 + tau)
             # loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * (tu_logit + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)])  # v0
@@ -199,26 +187,20 @@ class MTMT(nn.Module):
             # loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * ((1 - treat[:, 1]) * (tu_logit + u_logit[t].detach()).squeeze() + treat[:, 1] * (tu_logit_s + u_logit[t].detach()).squeeze()), y_true[:, i]) for i, t in enumerate(target_task)])  # tu_logit_s directly models tau of 9AI, v1
             # Control * y0 + Treatment * ((y0 + tau) + 9AI * tau_s).
             # 2. 5AI/control -> tau, 5AI/9AI -> tau_s -> tau_s 3. control/5AI/9AI -> tau/tau_s  4. control/5AI/9AI -> tau, 5AI/9AI -> tau_s
-            loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * ((tu_logit + u_logit[t].detach()).squeeze() + treat[:, 1] * tu_logit_s.squeeze()), y_true[:, i]) for i, t in enumerate(target_task)])  # tu_logit_s models difference over 5AI
+            if reduction == 'none':
+                loss1_raw = [F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * ((tu_logit[t] + u_logit[t].detach()).squeeze() + treat[:, 1] * tu_logit_s[t].squeeze()), y_true[:, i]) for i, t in enumerate(target_task)]
+                loss1 = torch.zeros(len(target_task), device=user_input.device)
+                for i in range(len(loss1_raw)):
+                    loss1[i] = loss1_raw[i]
+            else:
+                loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * ((tu_logit[t] + u_logit[t].detach()).squeeze() + treat[:, 1] * tu_logit_s[t].squeeze()), y_true[:, i]) for i, t in enumerate(target_task)])  # tu_logit_s models difference over 5AI
             # Control * y0 + Treatment * (y0 + tau + tau_s). 5. treat/control -> tau, 5AI/9AI/control -> tau_s
             # loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * ((tu_logit + tu_logit_s + u_logit[t].detach()).squeeze()), y_true[:, i]) for i, t in enumerate(target_task)])  # tu_logit_s models difference over treat
+            # loss1 = sum([F.mse_loss((1 - treat[:, 0]) * u_logit[t].squeeze() + treat[:, 0] * (tu_logit[t] + tu_logit_s[t] + u_logit[t].detach()).squeeze(), y_true[:, i]) for i, t in enumerate(target_task)])  # v4
         
-        # ESN IPW regularize
-        # tu_tau = torch.sigmoid(tu_tau)
-        # loss2 = F.binary_cross_entropy_with_logits(tu_logit * tu_tau, y_true * treat) + F.binary_cross_entropy_with_logits(u_logit['nextday_login'] * (1 - tu_tau), y_true * (1 - treat))
-        # loss2 = F.mse_loss(tu_logit * torch.sigmoid(tu_tau), y_true.squeeze() * treat) + F.mse_loss(u_logit['label_nextday_login'] * (1 - torch.sigmoid(tu_tau)), y_true.squeeze() * (1 - treat))
-        # loss2 = F.mse_loss((1 - treat) * u_logit['nextday_login'].squeeze() * (1 - tu_tau) + treat * tu_logit.squeeze() * tu_tau, y_true)
-        # loss_pr = F.binary_cross_entropy_with_logits(tu_tau, treat)
-        
-        # interfere the model not to directly classify samples for treatments
-        # loss3 = F.binary_cross_entropy_with_logits(tu_tau.squeeze(), 1 - treat)  # binary
-        
-        # determine wheter treatment
-        # loss6 = F.binary_cross_entropy_with_logits(tu_tau * treat[:, 0], treat[:, 1] * treat[:, 0])
-
         # lower tau for active players but not necessarily vice versa; set pre30 > 25 (0.58) as high active
         treat = treat[:, 0] if treat.dim() > 1 else treat
-        loss5 = torch.clamp(F.mse_loss(1 - tu_logit, torch.ones_like(tu_logit, device=tu_logit.device), reduction='none') * (y_true[:, 1] > 0.6) * treat, min=0.2).mean()
+        loss5 = sum([torch.clamp(F.mse_loss(1 - tu_logit[t], torch.ones_like(tu_logit[t], device=tu_logit[t ].device), reduction='none') * (y_true[:, 1] > 0.6) * treat, min=0.2).mean() for t in target_task])
        
         if reduction == 'none':
             return loss1, loss5

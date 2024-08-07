@@ -132,11 +132,12 @@ class Bottleneck(nn.Module):
 class ResNet(nn.Module):
     def __init__(self, block, layers, hidden_dim, out_dim=None, in_ch=1, num_classes=1000, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
-                 norm_layer=None, drop=0., disc_encoder=None):
+                 norm_layer=None, drop=0., disc_encoder=None, no_downsample=False):
         super(ResNet, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm1d
         self._norm_layer = norm_layer
+        self.no_downsample = no_downsample
 
         self.disc_encoder = disc_encoder
 
@@ -157,11 +158,11 @@ class ResNet(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool1d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block, hidden_dim, layers[0], drop=drop)
-        self.layer2 = self._make_layer(block, hidden_dim * 2, layers[1], stride=2,
+        self.layer2 = self._make_layer(block, hidden_dim * 2, layers[1], stride=2 if not no_downsample else 1,
                                        dilate=replace_stride_with_dilation[0], drop=drop)
-        self.layer3 = self._make_layer(block, hidden_dim * 4, layers[2], stride=2,
+        self.layer3 = self._make_layer(block, hidden_dim * 4, layers[2], stride=2 if not no_downsample else 1,
                                        dilate=replace_stride_with_dilation[1], drop=drop)
-        self.layer4 = self._make_layer(block, hidden_dim * 8, layers[3], stride=2,
+        self.layer4 = self._make_layer(block, hidden_dim * 8, layers[3], stride=2 if not no_downsample else 1,
                                        dilate=replace_stride_with_dilation[2], drop=drop)
         self.avgpool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Linear(20, out_dim) if out_dim is not None else nn.Identity()
@@ -220,7 +221,7 @@ class ResNet(nn.Module):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
-        x = self.maxpool(x)
+        x = self.maxpool(x) if not self.no_downsample else x
 
         x = self.layer1(x)
         x = self.layer2(x)
@@ -234,8 +235,7 @@ class ResNet(nn.Module):
 
 class ResNetHeavy(nn.Module):
     def __init__(self, block, layers, hidden_dim, out_dim=None, in_ch=1, num_classes=1000, zero_init_residual=False,
-                 groups=1, drop=0., width_per_group=64, replace_stride_with_dilation=None,
-                 norm_layer=None):
+                 groups=1, drop=0., width_per_group=64, replace_stride_with_dilation=None, norm_layer=None, no_downsample=False):
         super().__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm1d
@@ -258,11 +258,11 @@ class ResNetHeavy(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.layer1 = self._make_layer(block, hidden_dim, layers[0], drop=drop)
-        self.layer2 = self._make_layer(block, hidden_dim * 2, layers[1], stride=2,
+        self.layer2 = self._make_layer(block, hidden_dim * 2, layers[1], stride=2 if not no_downsample else 1,
                                        dilate=replace_stride_with_dilation[0], drop=drop)
-        self.layer3 = self._make_layer(block, hidden_dim * 4, layers[2], stride=2,
+        self.layer3 = self._make_layer(block, hidden_dim * 4, layers[2], stride=2 if not no_downsample else 1,
                                        dilate=replace_stride_with_dilation[1], drop=drop)
-        self.layer4 = self._make_layer(block, hidden_dim * 8, layers[3], stride=2,
+        self.layer4 = self._make_layer(block, hidden_dim * 8, layers[3], stride=2 if not no_downsample else 1,
                                        dilate=replace_stride_with_dilation[2], drop=drop)
         self.avgpool = nn.AdaptiveAvgPool1d(1)
         self.fc = nn.Linear(39, out_dim) if out_dim != None else nn.Identity()

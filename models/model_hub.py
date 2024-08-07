@@ -249,3 +249,13 @@ def mtmt_mmoe_emb_v2(weighting, task_names=['label_nextday_login', 'label_login_
                  in_feat=626, enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None, 'drop': 0.2}})
     return MTMT(user_feat_enc=enc, treat_feat_enc=nn.Embedding(num_embeddings=2, embedding_dim=16), task_names=task_names,
                  t_dim=1, u_dim=128, tu_dim=256, num_cls=num_cls)
+
+def mtmt_mmoe_emb_v2_mtreat(weighting, task_names=['label_nextday_login', 'label_login_days_diff'], num_cls=[1, 1], **kwargs):
+    class MTLmodel(MMOE, weighting):
+        def __init__(self, **kwargs):
+            super(MTLmodel, self).__init__(**kwargs)
+            self.init_param()
+    enc = MTLmodel(task_names=task_names, encoder_class=resnet18, num_experts=4, rep_grad=False,
+                 in_feat=626, enc_kwargs={'all': {'hidden_dim': 16, 'out_dim': None, 'drop': 0.2}})
+    return MTMT(user_feat_enc=enc, treat_feat_enc=nn.Embedding(num_embeddings=3, embedding_dim=16), treat_feat_enc_s=nn.Embedding(num_embeddings=3, embedding_dim=16),
+                 task_names=task_names, t_dim=1, u_dim=128, tu_dim=256, num_cls=num_cls, process_treats=True, **kwargs)

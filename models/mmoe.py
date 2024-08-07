@@ -33,7 +33,6 @@ class MMOE(AbsArchitecture):
         # self.decoders = nn.ModuleDict({task: nn.Linear(rep_dim, 1) for task in self.task_names})
         
     def forward(self, inputs: torch.tensor, task_name : str =None):
-        # TODO use nn.embedding to encode inputs as EFIN
         experts_shared_rep = torch.stack([e(inputs) for e in self.expert_shared])
             
         out = {}
