@@ -17,7 +17,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.cuda.amp import GradScaler, autocast
 import torch.backends.cudnn as cudnn
 
-from data_loader import get_data, create_folds, get_data_criteo
+from data_loader import get_data, create_folds, get_data_public
 from metrics import uplift_at_k, weighted_average_uplift, metrics_mt
 from sklift.metrics import uplift_auc_score, qini_auc_score
 from utils import *
@@ -37,28 +37,41 @@ def valid(model, valid_dataloader, device, epoch, reduction):
         else:
             feature_list = X.to(device)
         is_treat = T.to(device)
-        if valid_label.shape[1] > len(target_task):
+        if valid_label.dim() > 1 and valid_label.shape[1] > len(target_task):
             label_list = valid_label.to(device)[:, :-1]  # exclude pre30_logindays
         else:
             label_list = valid_label.to(device)
+        uplift_s = None
 
         with autocast():
             if 'efin' in args.model_name:
                 _, _, _, _, _, uplift = model(feature_list, is_treat)
-            elif 'dragonnet' in args.model_name:
+            elif any([x in args.model_name for x in ['m3tn', 'hydranet', 's_learner', 't_learner']]) and args.data_type == 'warmtype':
+                y0, yk, _, _ = model(feature_list, is_treat) if 's_learner' in args.model_name else model(feature_list)
+                y1 = yk[0]
+                y1[is_treat[:, 1] == 1] = yk[1][is_treat[:, 1] == 1]
+                uplift = y1 - y0
+            elif any([x in args.model_name for x in ['dragonnet', 'crfnet', 't_learner', 'flextenet', 'tarnet', 'm3tn']]):
                 y0, y1, _, _ = model(feature_list)
                 uplift = y1 - y0
-            elif 'mtmt' in args.model_name:
-                # y0, _, y1, _ = model(feature_list, is_treat)
-                # uplift = y1 - y0['nextday_login']
+            elif 'euen' in args.model_name:
+                _, _, _, _, _, uplift = model(feature_list)
+            elif 'descn' in args.model_name:
+                _, _, _, _, _, _, _, _, _, p_h1, p_h0, _ = model(feature_list)
+                uplift = p_h1 - p_h0
+            elif 'snet' in args.model_name or 's_learner' in args.model_name:
+                y0, y1, _, _ = model(feature_list, is_treat)
+                uplift = y1 - y0
+            elif 'mtmt' in args.model_name: 
                 _, _, uplift, uplift_s = model(feature_list, is_treat)
             else:
                 raise NotImplementedError
-            
-        if uplift_s != None:
-            uplift = uplift + uplift_s
         
-        uplift = uplift.squeeze()
+        if 'mtmt' in args.model_name:
+            uplift = torch.cat([u for u in uplift.values()], dim=-1) if not args.mtask else torch.cat([u.unsqueeze(-1) for u in uplift.values()], dim=-1)
+            if uplift_s != None:
+                uplift_s = torch.cat([u for u in uplift_s.values()], dim=-1) if not args.mtask else torch.cat([u.unsqueeze(-1) for u in uplift_s.values()], dim=-1)
+        uplift = uplift + uplift_s if uplift_s != None else uplift
         predictions.extend(uplift.squeeze().cpu().detach())
         true_labels.extend(label_list.squeeze().cpu().detach().numpy())
         is_treatment.extend(is_treat.squeeze().cpu().detach().numpy())
@@ -66,22 +79,17 @@ def valid(model, valid_dataloader, device, epoch, reduction):
         del feature_list, is_treat, label_list, uplift
 
     true_labels = np.array(true_labels)
-    # predictions = torch.tensor(predictions)
     is_treatment = np.array(is_treatment)
-    
-    # pred_prob = torch.sigmoid(predictions)
-    # roc_auc = roc_auc_score(true_labels, pred_prob)
-    # pr_auc  = average_precision_score(true_labels, pred_prob)
     predictions = np.array(predictions)
     
     u_at_k, qini_coef, uplift_auc, wau = [], [], [], []
 
     if args.mtask:
         for i in range(true_labels.shape[1]):
-            u_at_k.append(metrics_mt(uplift_at_k, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction))
-            qini_coef.append(metrics_mt(qini_auc_score, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction))
-            uplift_auc.append(metrics_mt(uplift_auc_score, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction))
-            wau.append(metrics_mt(weighted_average_uplift, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction))
+            u_at_k.append(metrics_mt(uplift_at_k, true_labels[:, i], predictions[:, i], is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction))
+            qini_coef.append(metrics_mt(qini_auc_score, true_labels[:, i], predictions[:, i], is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction))
+            uplift_auc.append(metrics_mt(uplift_auc_score, true_labels[:, i], predictions[:, i], is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction))
+            wau.append(metrics_mt(weighted_average_uplift, true_labels[:, i], predictions[:, i], is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction))
     else:
         u_at_k = metrics_mt(uplift_at_k, true_labels, predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
         qini_coef = metrics_mt(qini_auc_score, true_labels, predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
@@ -119,16 +127,16 @@ def train(local_rank, train_files, test_files, fold_idx):
     learning_rate = 0.001
     metric_names = ['QINI', 'u_at_k']
     treat_names = ['5ai', '9ai']
-    save_name = treat_names if args.data_type == 'warmtype' else ['login', 'diff']
+    save_name = treat_names if args.data_type == 'warmtype' and not args.mtask else ['login', 'diff']
     if torch.cuda.is_available():
         device = f'cuda:{args.local_rank}'
     else:
         device = 'cpu'
-    model, model_kwargs = get_model(name=args.model_name, task_name=target_task)
+    model, model_kwargs = get_model(name=args.model_name, task_name=target_task, device=device)
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], output_device=local_rank) if dist.is_initialized() else model
 
-    model = torch.compile(model)
+    # model = torch.compile(model)
     
     ckpt_path = f"checkpoints/{args.data_type}/{args.norm_type}/{args.model_name}/{args.model_name}_{fold_idx}_"
     pred_path = f"predictions/{args.data_type}/{args.norm_type}/{args.model_name}/train/{args.model_name}_{fold_idx}_"
@@ -143,6 +151,9 @@ def train(local_rank, train_files, test_files, fold_idx):
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=lamb)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=5, eta_min=1e-5)
     scaler = GradScaler()
+
+    if args.mtask:
+        model.user_enc.train_loss_buffer = np.zeros([len(target_task), num_epoch])
     
     if args.resume:
         checkpoint = torch.load(args.ckpt_path, map_location=device)
@@ -154,10 +165,15 @@ def train(local_rank, train_files, test_files, fold_idx):
     logger.info(f'{args.model_name}: Rank {local_rank} Start Training') 
     for epoch in range(start_epoch, num_epoch):
         train_dataloader, valid_dataloader = get_data(train_files, test_files, feature_group=None, batch_size=batch_size, dist=dist.is_initialized(), target_treatment=target_treatment, target_task=target_task)
-        # train_dataloader, valid_dataloader = get_data_criteo(batch_size, fold_idx)
+        # train_dataloader, valid_dataloader = get_data_public(batch_size, fold_idx, 'data/data_criteo.npz', target_idx=0, treat_idx=0)
         tr_loss = 0
         tr_steps = 0
-        model.epoch = epoch
+        
+        try:
+            model.user_enc.epoch = epoch
+        except:
+            ...
+
         logger.info("Training Epoch: {}/{}".format(epoch + 1, int(num_epoch)))
         if dist.is_initialized():
             train_dataloader.sampler.set_epoch(epoch)
@@ -175,21 +191,33 @@ def train(local_rank, train_files, test_files, fold_idx):
             model.train()
             optimizer.zero_grad()
 
-            if 'dragonnet' in args.model_name or not args.enable_amp:  # unsafe bce for dragonnet, which does not allow autocast
-                loss = model.calculate_loss(feature_list, is_treat, label_list, target_task, reduction='mean')
+            if not args.enable_amp:  # custom loss that uses F.bce_loss does not allow amp
+                loss = model.calculate_loss(feature_list, is_treat, label_list)
             else:
                 with autocast():
-                    loss = model.calculate_loss(feature_list, is_treat, label_list, target_task, reduction='mean')
+                    if 'mtmt' in args.mdoel_name:
+                        loss = model.calculate_loss(feature_list, is_treat, label_list, target_task, reduction='sum')
+                    else:
+                        loss = model.calculate_loss(feature_list, is_treat, label_list)
 
             if args.enable_amp:
-                scaler.scale(loss).backward()
+                if args.mtask:
+                    loss = scaler.scale(loss)
+                    loss[1].backward(retain_graph=True)
+                    model.user_enc.backward(loss[0])
+                else:
+                    scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
             else:
+                raise NotImplementedError if args.mtask else ...
                 loss.backward()
                 optimizer.step()
+            tr_loss += sum(loss[0]) + loss[1] if isinstance(loss, tuple) else loss.item() 
 
-            tr_loss += loss.item()
+            if args.mtask:
+                model.user_enc.train_loss_buffer[:, epoch] = tr_loss.item()
+
         scheduler.step()
 
         # if local_rank == 0:
@@ -202,7 +230,6 @@ def train(local_rank, train_files, test_files, fold_idx):
         #     for k, v in valid_metrics.items():
         #         mlflow.log_metric(k + f'_{fold_idx}', v, epoch)
         #     mlflow.log_metric(f'train_loss_{fold_idx}', tr_loss / tr_steps, epoch)
-
 
         if best_valid_metrics is None:
             if isinstance(valid_metrics, list):
@@ -256,8 +283,8 @@ if __name__ == "__main__":
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
     parser.add_argument('--model_name', type=str, default='mtmt')
     parser.add_argument('--enable_mlflow', action='store_true', default=False)
-    parser.add_argument('--enable_amp', action='store_true', default=True)
-    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'warmtype'], help='all data or a subset of data')
+    parser.add_argument('--enable_amp', action='store_true', default=False)
+    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'warmtype', 'public'], help='all data or a subset of data')
     parser.add_argument('--mtask', action='store_true', default=False)
     parser.add_argument('--note', type=str, help='additional notes')
     args = parser.parse_args()
@@ -307,8 +334,8 @@ if __name__ == "__main__":
         
     ave_best_valid_metrics = None
     target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround'] if args.data_type == 'warmtype' else ['treatment_next_iswarm']
-    target_task = ['label_nextday_login'] if not args.mtask else ['label_nextday_login', 'label_login_days_diff']
-    args.data_type = 'mtask' if args.mtask else args.data_type
+    target_task = ['label_login_days_diff'] if not args.mtask else ['label_nextday_login', 'label_login_days_diff']
+    args.data_type = 'mtask' if args.mtask and args.data_type != 'warmtype' else args.data_type
     reduction = 'mean'
     
     fold_enumerator = enumerate(folds)

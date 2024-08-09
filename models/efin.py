@@ -105,7 +105,7 @@ class EFIN(nn.Module):
         c_prob = torch.sigmoid(c_logit)
 
         # uplift net
-        t_rep = self.t_rep(t_true)
+        t_rep = self.t_rep(torch.ones_like(t_true))
         xt, xt_weight = self.interaction_attn(t_rep, x_rep)
 
         u_last = self.u_fc(xt)

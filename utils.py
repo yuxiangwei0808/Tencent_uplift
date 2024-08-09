@@ -3,9 +3,9 @@ import numpy as np
 import os
 
 from models.efin import EFIN
-from models.dragonnet import DragonNet
 from models.model_hub import *
 from models.mt_weighting import *
+from models.baseline import *
 
 
 def check_and_make_dir(path):
@@ -33,19 +33,40 @@ def save_predictions(target, pred, treat, valid_metrics, metric_name, path, feat
     np.savez_compressed(path + metric_name, target=target, pred=pred, treat=treat, feature=feature, **valid_metrics)
 
 
-def get_model(name, model_kwargs=None, task_name=None):
+def get_model(name, model_kwargs=None, task_name=None, device=None):
     if 'efin' in name:
         if model_kwargs is None:
-            model_kwargs = {'input_dim': 629, 'hc_dim': 96, 'hu_dim': 96, 'is_self': False, 'act_type': 'elu'}
+            model_kwargs = {'input_dim': 626, 'hc_dim': 128, 'hu_dim': 128, 'is_self': False, 'act_type': 'elu'}
         return EFIN(**model_kwargs), model_kwargs
     elif 'dragonnet' in name:
         if model_kwargs is None:
-            model_kwargs = {'input_dim': 622, 'shared_hidden': 512, 'outcome_hidden': 256, 'is_regularized': False}
+            model_kwargs = {'input_dim': 626, 'shared_hidden': 512, 'outcome_hidden': 256, 'is_regularized': False}
         return DragonNet(**model_kwargs), model_kwargs
     elif 'mtmt' in name:
         if model_kwargs is None:
-            model_kwargs = {'name': 'mtmt_mmoe_emb_v1', 't_dim': 1, 'u_dim': 128, 'tu_dim':256}
-        return mtmt_mmoe_emb_v1(), model_kwargs
+            model_kwargs = {'name': 'mtmt_mmoe_emb_v2', 't_dim': 1, 'u_dim': 128, 'tu_dim':256}
+        return mtmt_mmoe_emb_v2_mtreat(), model_kwargs
+    elif 'euen' in name:
+        model_kwargs = {'input_dim': 626, 'hc_dim': 64, 'hu_dim': 64}
+        return EUEN(**model_kwargs), model_kwargs
+    elif 'tarnet' in name:
+        return TARNET(input_dim=626), None
+    elif 'crfnet' in name:
+        return CFRNET(input_dim=626), None
+    elif 'descn' in name:
+        return DESCN(input_dim=626, device=device), None
+    elif 'snet' in name:
+        return SNet(input_dim=626), None
+    elif 'flextenet' in name:
+        return FlexTENet(input_dim=626), None
+    elif 's_learner' in name:
+        return SLearner(input_dim=626), None
+    elif 't_learner' in name:
+        return TLearner(input_dim=626), None
+    elif 'hydranet' in name:
+        return HydraNet(input_dim=626, num_treats=1), None
+    elif 'm3tn' in name:
+        return M3TN(input_dim=626, num_treats=1), None
     else:
         raise NotImplementedError
 

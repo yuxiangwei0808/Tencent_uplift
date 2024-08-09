@@ -45,7 +45,51 @@ def main_attn():
 
     attrs00, attrs01, attrs10, attrs11 = torch.cat(attrs00, 0).mean(0), torch.cat(attrs01, 0).mean(0), torch.cat(attrs10, 0).mean(0), torch.cat(attrs11, 0).mean(0)
     np.savez_compressed('attn', uTuL=attrs00, uTL=attrs01, TuL=attrs10, TL=attrs11)
+
+
+@torch.no_grad()
+def main_attn_mtmt():
+    ckpt_path = 'checkpoints/warmtype/zscore/MTask_mtmt_mmoe_emb_v2_EFIN/'
+    task = 'diff'
+    metric = 'u_at_k'
+    treat = '5AI'
+    attn = []
+    attn_s = []
+    for i in range(5):
+        checkpoint = torch.load(ckpt_path + f'MTask_mtmt_mmoe_emb_v2_EFIN_{i}_{task}_{metric}.pth', map_location=device)['model_state_dict']
+        state_dict = OrderedDict()
+        for k, v in checkpoint.items():
+            state_dict[k[10:]] = v
+        model.load_state_dict(state_dict)
+        model.eval()
+
+        for X, T, valid_label in valid_dataloader:
+            X, T = X.to(device), T.to(device)
+            _, _, _, _, attrs, attrs_s = model(X, T)
+            attrs = attrs['label_nextday_login'] if task == 'login' else attrs['label_login_days_diff']
+            attrs_s = attrs_s['label_nextday_login'] if task == 'login' else attrs_s['label_login_days_diff']
+
+            weight = torch.pinverse(model.treatment_enc.weight)
+            weight_s = torch.pinverse(model.treatment_enc_s.weight)
+            attrs = torch.matmul(attrs.mean(0), weight).cpu()
+            attrs_s = torch.matmul(attrs_s.mean(0), weight_s).cpu()
+            attn.append(attrs.cpu())
+            attn_s.append(attrs_s.cpu())
     
+    attn = np.array(torch.stack(attn, 0).mean(0))
+    attn = interpolate(attn, 626)
+    attn_s = np.array(torch.stack(attn_s, 0).mean(0))
+    attn_s = interpolate(attn_s, 626)
+    x = np.stack((attn[:, 1], attn_s[:, 1]), 1)
+    plt.figure()
+    plt.imshow(x, cmap='RdBu', aspect='auto')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.xticks([0, 1])
+    plt.colorbar()
+    plt.savefig(f'attn_{metric}_{treat}_{task}.png')
+
+
 
 @torch.no_grad()
 def main_grad():
@@ -142,30 +186,20 @@ def analysis():
     #     f.write(f'Treat: {", ".join(ind_label_treat)}\n')
     #     f.write(f'Control: {", ".join(ind_label_control)}\n')
 
-    # plt.figure()
-    # plt.imshow(TL, cmap='viridis', aspect='auto')
-    # plt.grid(True)
-    # plt.tight_layout()
-    # plt.xticks([0, 1])
-    # plt.yticks(ticks=np.unique(ind[0]))
-    # plt.colorbar()
-    # plt.savefig('attn_TL.png')
-
     
 if __name__ == '__main__':
-    analysis()
     parser = argparse.ArgumentParser()
     parser.add_argument('--local_rank', type=int, default=1)
     parser.add_argument('--ckpt_path', type=str)
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
     parser.add_argument('--model_name', type=str, default='mtmt')
-    parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'warmtype'], help='all data or a subset of data')
-    parser.add_argument('--test_data_type', type=str, default='random')
+    parser.add_argument('--data_type', type=str, default='warmtype', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'warmtype'], help='all data or a subset of data')
+    parser.add_argument('--test_data_type', type=str, default='warmtype')
     args = parser.parse_args()
     
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     torch.cuda.set_device(device)
-    batch_size = 3840 // 4
+    batch_size = 3840
     metric = 'QINI'
     args.model_name = 'mtmt_res_emb_v0_4_0_EFIN_l1+0.2l5'
 
@@ -175,13 +209,13 @@ if __name__ == '__main__':
         labels = f.readlines()
 
     labels = [x.strip('\n') for x in labels]
-    target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround'] if args.data_type == 'warmtype' else ['treatment_next_iswarm']
-    target_task = ['label_nextday_login']
+    target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround']
+    target_task = ['label_nextday_login', 'label_login_days_diff']
     
     train_dataloader, valid_dataloader = get_data([*file_path], [*file_path], feature_group=None, batch_size=batch_size, target_treatment=target_treatment, target_task=target_task)
 
-    model = mtmt_res_emb_v0_4_0(combined_input=True, combined_output=True)
+    model = mtmt_mmoe_emb_v2_mtreat(DWA, log_tensors=True)
     model = model.to(device)
     ckpt_paths = [f'checkpoints/{args.data_type}/{args.norm_type}/{args.model_name}/{args.model_name}_{i}_{metric}.pth' for i in range(5)]
 
-    main_grad()
+    main_attn_mtmt()

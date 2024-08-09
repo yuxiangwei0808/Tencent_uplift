@@ -282,11 +282,11 @@ def analysis_by_rank(targets, preds, treats, add_feats):
     plt.savefig(f'{source_dir}/uk_rank.png')
 
 
-metric = 'u_at_k'
-treat_name = ''
-task_name = 'login'
-model_name = 'MTask-mtmt_mmoe_emb_v1_EFIN_l1+0.2l5_diffBi_meanLoss'
-data_type = 'mtask'
+metric = 'QINI'
+treat_name = '9AI'
+task_name = ''
+model_name = 'efin_criteo'
+data_type = 'warmtype'
 source = f'predictions/{data_type}/zscore/{model_name}/test/'
 
 print(model_name, metric, treat_name, task_name)
@@ -320,10 +320,9 @@ for i in range(5):
         ind_control = treat[:, 0] == 0
         if '5AI' in treat_name:
             ind_ai = (treat[:, 0] == 1) & (treat[:, 1] == 0)
-            target, pred, treat = target[ind_control | ind_ai], pred[ind_control | ind_ai], treat[:, 0][ind_control | ind_ai]
         else:
             ind_ai = (treat[:, 0] == 1) & (treat[:, 1] == 1)
-            target, pred, treat = target[ind_control | ind_ai], pred[ind_control | ind_ai], treat[:, 0][ind_control | ind_ai]
+        target, pred, treat = target[ind_control | ind_ai], pred[ind_control | ind_ai], treat[:, 0][ind_control | ind_ai]
     if task_name != '':
         target = target[:, 0] if task_name == 'login' else target[:, 1]
 

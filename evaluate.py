@@ -41,36 +41,50 @@ def valid(model, valid_dataloader, device, num_org_feat, reduction):
             y0, y1, _, _ = model(feature_list)
             uplift = y1 - y0
         elif 'mtmt' in args.model_name:
-            # y0, _, y1 = model(feature_list, is_treat)
-            # uplift = y1 - y0['nextday_login']
-            _, prps, uplift, uplift_s = model(feature_list, is_treat)
+            _, _, uplift, uplift_s = model(feature_list, is_treat)
+        elif any([x in args.model_name for x in ['m3tn', 'hydranet', 's_learner', 't_learner']]) and args.data_type == 'warmtype':
+            y0, yk, _, _ = model(feature_list, is_treat) if 's_learner' in args.model_name else model(feature_list)
+            y1 = yk[0]            
+            y1[is_treat[:, 1] == 1] = yk[1][is_treat[:, 1] == 1]
+            uplift = y1 - y0
+        elif any([x in args.model_name for x in ['dragonnet', 'crfnet', 't_learner', 'flextenet', 'tarnet', 'm3tn']]):
+            y0, y1, _, _ = model(feature_list)
+            uplift = y1 - y0
+        elif 'snet' in args.model_name or 's_learner' in args.model_name:
+            y0, y1, _, _ = model(feature_list, is_treat)
+            uplift = y1 - y0
+        elif 'euen' in args.model_name:
+            _, _, _, _, _, uplift = model(feature_list)
+        elif 'descn' in args.model_name:
+            _, _, _, _, _, _, _, _, _, p_h1, p_h0, _ = model(feature_list)
+            uplift = p_h1 - p_h0
         else:
             raise NotImplementedError
 
-        if uplift_s != None:
-            uplift = uplift + uplift_s * (F.sigmoid(prps) > 0.5)
-
+        if 'mtmt' in args.model_name:
+            uplift = torch.cat([u for u in uplift.values()], dim=-1) if not args.mtask else torch.cat([u.unsqueeze(-1) for u in uplift.values()], dim=-1)
+            if uplift_s != None:
+                uplift_s = torch.cat([u for u in uplift_s.values()], dim=-1) if not args.mtask else torch.cat([u.unsqueeze(-1) for u in uplift_s.values()], dim=-1) if uplift_s != None else None
         predictions.extend(uplift.squeeze().detach().cpu())
         true_labels.extend(label_list.squeeze().detach().cpu().numpy())
         is_treatment.extend(is_treat.squeeze().detach().cpu().numpy())
 
     true_labels = np.array(true_labels)
-    # predictions = torch.tensor(predictions)
     is_treatment = np.array(is_treatment)
     add_features = np.array(add_features)
     
+    # predictions = torch.tensor(predictions)
     # pred_prob = torch.sigmoid(predictions)
     # roc_auc = roc_auc_score(true_labels, pred_prob)
     # pr_auc  = average_precision_score(true_labels, pred_prob)
     predictions = np.array(predictions)
 
     if args.mtask:
-        i = 1 if 'diff' in args.ckpt_path[-18:] else 0  # only support for loginday and loginday difference
-        print(i)
-        u_at_k = metrics_mt(uplift_at_k, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
-        qini_coef = metrics_mt(qini_auc_score, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
-        uplift_auc = metrics_mt(uplift_auc_score, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
-        wau = metrics_mt(weighted_average_uplift, true_labels[:, i], predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
+        i = 1 if 'diff' in args.ckpt_path.split('diffBi')[-1] else 0  # only support for loginday and loginday difference
+        u_at_k = metrics_mt(uplift_at_k, true_labels[:, i], predictions[:, i], is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
+        qini_coef = metrics_mt(qini_auc_score, true_labels[:, i], predictions[:, i], is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
+        uplift_auc = metrics_mt(uplift_auc_score, true_labels[:, i], predictions[:, i], is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
+        wau = metrics_mt(weighted_average_uplift, true_labels[:, i], predictions[:, i], is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
     else:
         u_at_k = metrics_mt(uplift_at_k, true_labels, predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
         qini_coef = metrics_mt(qini_auc_score, true_labels, predictions, is_treatment, m_treat=len(target_treatment) > 1, reduce=reduction)
@@ -92,15 +106,21 @@ def main(args):
     model, model_kawrgs = get_model(name=args.model_name)
     model = model.to(device)
 
-    model = torch.compile(model)
+    # model = torch.compile(model)
+
+    if args.mtask:
+        model.user_enc.train_loss_buffer = np.zeros([len(target_task), 2])
 
     checkpoint = torch.load(args.ckpt_path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-
-    # state_dict = OrderedDict()
-    # for k, v in checkpoint['model_state_dict'].items():
-    #     state_dict[k[10:]] = v
-    # model.load_state_dict(state_dict)
+    
+    try:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    except Exception:
+        state_dict = OrderedDict()
+        for k, v in checkpoint['model_state_dict'].items():
+            state_dict[k[10:]] = v
+        # state_dict.pop('user_enc.loss_scale')
+        model.load_state_dict(state_dict)
 
     
     print('valid metrics: {} of {}'.format(checkpoint['metric'], args.ckpt_path))
@@ -111,7 +131,7 @@ def main(args):
     saving_path = args.ckpt_path.split('/')[-1][:-4]
     saving_path = f'predictions/{args.test_data_type}/{args.norm_type}/{args.model_name}/test/{saving_path}'
 
-    if isinstance(valid_metrics, tuple):
+    if isinstance(valid_metrics, list):
         for i in range(len(valid_metrics)):
             save_predictions(true_labels, predictions, treatment, valid_metrics[i], '', saving_path + f'_{treat_names[i]}')
     else:
@@ -125,10 +145,10 @@ if __name__ == '__main__':
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--ckpt_path', type=str)
     parser.add_argument('--norm_type', type=str, default='zscore', help='normalization method for the original data')
-    parser.add_argument('--model_name', type=str, default='MTask-mtmt_mmoe_emb_v1_EFIN_l1+0.2l5_diffBi')
+    parser.add_argument('--model_name', type=str, default='mtmt')
     parser.add_argument('--data_type', type=str, default='full', choices=['full', 'highactive', 'midactive', 'lowactive', 'backflow', 'warmtype'], help='all data or a subset of data')
     parser.add_argument('--test_data_type', type=str, default='random')
-    parser.add_argument('--mtask', action='store_true', default=True)
+    parser.add_argument('--mtask', action='store_true', default=False)
     args = parser.parse_args()
 
     torch.set_float32_matmul_precision('high')
@@ -146,8 +166,8 @@ if __name__ == '__main__':
     org_feat_idx = [i for i in range(len(labels)) if 'origin' in labels[i]]
     target_treatment = ['treatment_next_iswarm', 'treatment_next_is_9aiwarmround'] if args.data_type == 'warmtype' else ['treatment_next_iswarm']
     target_task = ['label_nextday_login'] if not args.mtask else ['label_nextday_login', 'label_login_days_diff']
-    args.data_type = 'mtask' if args.mtask else args.data_type
-    args.test_data_type = 'mtask' if args.mtask else args.test_data_type
+    args.data_type = 'mtask' if args.mtask and args.data_type != 'warmtype' else args.data_type
+    args.test_data_type = 'mtask' if args.mtask and args.data_type != 'warmtype' else args.test_data_type
     reduction = None
     
     train_dataloader, valid_dataloader = get_data([*file_path], [*file_path], feature_group=None, batch_size=batch_size, addition_feat=org_feat_idx, target_treatment=target_treatment, target_task=target_task)
